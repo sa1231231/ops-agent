@@ -82,3 +82,36 @@ export function localHour(date: Date = new Date(), timeZone = BRIEF_TZ): number 
     ) % 24
   );
 }
+
+/**
+ * Display formatting. Everything a human reads renders in BRIEF_TZ.
+ *
+ * Timestamps are stored in UTC and only converted here, so there is exactly one
+ * place that decides what timezone the product speaks in. Mixed UTC and local
+ * timestamps in the same console are how you end up misreading whether the
+ * brief went out on time.
+ */
+
+/** e.g. "15:52 EDT" */
+export function formatLocalTime(date: Date, timeZone = BRIEF_TZ): string {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZoneName: "short",
+  }).format(date);
+}
+
+/** e.g. "2026-08-13 15:52 EDT" */
+export function formatLocalDateTime(date: Date, timeZone = BRIEF_TZ): string {
+  return `${localDateString(date, timeZone)} ${formatLocalTime(date, timeZone)}`;
+}
+
+/** The zone's current abbreviation, e.g. "EDT". */
+export function timeZoneLabel(date = new Date(), timeZone = BRIEF_TZ): string {
+  const part = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "short" })
+    .formatToParts(date)
+    .find((p) => p.type === "timeZoneName");
+  return part?.value ?? timeZone;
+}

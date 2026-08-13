@@ -1,5 +1,5 @@
 import type { Account } from "../db/queries/accounts.js";
-import { BRIEF_TZ } from "../time.js";
+import { BRIEF_TZ, formatLocalDateTime, timeZoneLabel } from "../time.js";
 import type { JobState } from "./jobs.js";
 
 /** Everything rendered here is server-side; there is no client JS and no build. */
@@ -154,16 +154,7 @@ function relativeAgo(date: Date | null): string {
 /** Absolute timestamp plus relative age: one answers "when", the other "how stale". */
 function lastSyncedLabel(at: Date | null): string {
   if (!at) return "Never synced";
-  const stamp = new Intl.DateTimeFormat("en-CA", {
-    timeZone: BRIEF_TZ,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(at);
-  return `Last synced ${stamp} (${relativeTime(at)})`;
+  return `Last synced ${formatLocalDateTime(at)} (${relativeTime(at)})`;
 }
 
 function renderJob(name: string, label: string, job: JobState): string {
@@ -196,6 +187,7 @@ export function renderAccountsPage(
   lastSynced: Date | null = null,
   briefHourValue = 6,
 ): string {
+  const zone = timeZoneLabel();
   const rows = accounts
     .map((account) => {
       const status = statusOf(account);
@@ -304,7 +296,7 @@ export function renderAccountsPage(
         <div class="row">
           <select id="hour" name="brief_hour">
             ${Array.from({ length: 24 }, (_, h) => {
-              const label = `${String(h).padStart(2, "0")}:00`;
+              const label = `${String(h).padStart(2, "0")}:00 ${zone}`;
               return `<option value="${h}"${h === briefHourValue ? " selected" : ""}>${label}</option>`;
             }).join("")}
           </select>

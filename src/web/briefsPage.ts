@@ -1,6 +1,7 @@
 import { BRIEF_RETENTION_DAYS } from "../config.js";
 import type { BriefSummary } from "../db/queries/briefs.js";
 import type { ComposedBrief } from "../ranking/compose.js";
+import { formatLocalTime } from "../time.js";
 import { escapeHtml } from "./admin.js";
 
 /**
@@ -117,9 +118,7 @@ function renderCard(brief: BriefSummary): string {
       ? `<div class="err">${escapeHtml(payload.error)}</div>`
       : `<div class="line" style="opacity:.55">No payload recorded.</div>`;
 
-  const sentTime = brief.sent_at
-    ? new Date(brief.sent_at).toISOString().slice(11, 16) + " UTC"
-    : "—";
+  const sentTime = brief.sent_at ? formatLocalTime(new Date(brief.sent_at)) : "—";
 
   return `
     <article class="card">
