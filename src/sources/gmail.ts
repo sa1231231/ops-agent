@@ -22,6 +22,31 @@ const METADATA_HEADERS = [
 
 const CONCURRENCY = 10;
 
+/**
+ * Tabs that never contain something he needs to act on.
+ *
+ * Excluded at fetch time rather than demoted at ranking time: it cuts the API
+ * calls, the stored rows, and the noise in one move. Updates and Forums are
+ * deliberately *not* excluded — Updates carries flight changes, invoices, and
+ * legal notices, which are exactly the kind of thing a morning brief should
+ * surface.
+ *
+ * The tradeoff to know about: Gmail's categorizer is occasionally wrong, and a
+ * real message miscategorized as Promotions will never be seen at all, since
+ * scoring cannot rescue a message that was never fetched.
+ */
+const EXCLUDED_CATEGORIES = ["CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL"] as const;
+
+/** Never wanted anywhere, inbound or outbound. */
+const ALWAYS_EXCLUDED = ["SPAM", "TRASH"] as const;
+
+/** Query fragment for the list-based paths, so excluded mail is never fetched. */
+const INBOX_FILTER = "-in:chats -category:promotions -category:social";
+
+function hasAny(message: NormalizedMessage, labels: readonly string[]): boolean {
+  return message.labels.some((label) => labels.includes(label));
+}
+
 export interface NormalizedMessage {
   gmailMessageId: string;
   gmailThreadId: string;
@@ -194,6 +219,7 @@ async function fetchMetadata(
 async function fetchMany(
   accessToken: string,
   ids: string[],
+  { excludeCategories = true }: { excludeCategories?: boolean } = {},
 ): Promise<NormalizedMessage[]> {
   const raw = await mapWithConcurrency(ids, CONCURRENCY, (id) =>
     fetchMetadata(accessToken, id).catch((err: unknown) => {
@@ -203,7 +229,19 @@ async function fetchMany(
       throw err;
     }),
   );
-  return raw.filter((m): m is RawMessage => m !== null).map(normalizeMessage);
+
+  const messages = raw
+    .filter((m): m is RawMessage => m !== null)
+    .map(normalizeMessage);
+
+  // Applied here rather than only in the query, because history.list — the
+  // incremental path — accepts no query and would otherwise leak promotions
+  // back in on every sync after cold start.
+  const excluded = excludeCategories
+    ? [...ALWAYS_EXCLUDED, ...EXCLUDED_CATEGORIES]
+    : ALWAYS_EXCLUDED;
+
+  return messages.filter((m) => !hasAny(m, excluded));
 }
 
 /**
@@ -218,7 +256,7 @@ export async function fetchColdStartInbox(
 ): Promise<NormalizedMessage[]> {
   const ids = await listMessageIds(
     accessToken,
-    `newer_than:${COLD_START_DAYS}d -in:chats`,
+    `newer_than:${COLD_START_DAYS}d ${INBOX_FILTER}`,
     MAX_INBOX_MESSAGES_PER_ACCOUNT,
   );
   return fetchMany(accessToken, ids);
@@ -240,7 +278,10 @@ export async function fetchSentForGraph(
     `in:sent newer_than:${SENT_GRAPH_DAYS}d`,
     MAX_SENT_MESSAGES_PER_ACCOUNT,
   );
-  return fetchMany(accessToken, ids);
+  // Category exclusion is inbound-only. Who he writes to is the signal here,
+  // and dropping a sent message because Gmail tagged the thread Promotions
+  // would quietly weaken the correspondent graph.
+  return fetchMany(accessToken, ids, { excludeCategories: false });
 }
 
 export async function fetchProfileHistoryId(
@@ -320,7 +361,7 @@ export async function fetchRecoveryWindow(
 ): Promise<NormalizedMessage[]> {
   const ids = await listMessageIds(
     accessToken,
-    "newer_than:2d -in:chats",
+    `newer_than:2d ${INBOX_FILTER}`,
     MAX_INBOX_MESSAGES_PER_ACCOUNT,
   );
   return fetchMany(accessToken, ids);

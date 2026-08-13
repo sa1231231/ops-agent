@@ -120,8 +120,14 @@ Flow uses `access_type=offline` and `prompt=consent` (forces a refresh token on 
 Runs on the cron worker every ~20 minutes, all day.
 
 **Cold start, per account:**
-- Inbox: `newer_than:7d -in:chats`, capped ~500 messages/account. `COLD_START_DAYS = 7` is a hard constant. Never a full-inbox scan.
+- Inbox: `newer_than:7d -in:chats -category:promotions -category:social`, capped ~500 messages/account. `COLD_START_DAYS = 7` is a hard constant. Never a full-inbox scan.
 - Sent graph: `in:sent newer_than:90d` with `format=metadata`, capped ~2000, to populate `correspondents`.
+
+**Excluded tabs.** Promotions and Social are dropped at fetch time, not demoted at ranking time — it removes the API calls, the stored rows, and the noise in one move. Spam and Trash likewise. **Updates and Forums are deliberately kept**: Updates carries flight changes, invoices, and legal notices, which are exactly what a morning brief should surface.
+
+Enforced in two places, and both are required. The query fragment covers the list-based paths; a label filter covers `history.list`, which accepts no query and would otherwise leak promotions back in on every incremental sync after cold start. Category exclusion is **inbound-only** — dropping a sent message because Gmail tagged its thread Promotions would quietly weaken the correspondent graph.
+
+Known tradeoff: Gmail's categorizer is occasionally wrong, and a real message miscategorized as Promotions is never seen at all — scoring cannot rescue a message that was never fetched.
 
 **Incremental:** `users.history.list` against the stored `gmail_history_id`. On 404 (history expired, gap >~1 week), fall back to a bounded `newer_than:2d` resync and reset the cursor. **Never widen to a full scan on error.**
 
