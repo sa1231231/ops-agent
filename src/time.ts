@@ -71,7 +71,7 @@ export function addDays(date: Date, days: number): Date {
 }
 
 /** Local hour (0–23) at `date`. Used to gate the morning brief. */
-export function localHour(date: Date, timeZone = BRIEF_TZ): number {
+export function localHour(date: Date = new Date(), timeZone = BRIEF_TZ): number {
   return (
     Number(
       new Intl.DateTimeFormat("en-US", {

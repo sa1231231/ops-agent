@@ -11,12 +11,13 @@
     "build": "tsc && cp -R src/db/migrations dist/db/",
     "start": "npm run start:web",
     "start:web": "node dist/db/migrate.js && node dist/web/server.js",
-    "start:worker": "node dist/jobs/sync.js",
+    "start:worker": "node dist/db/migrate.js && node dist/jobs/worker.js",
     "migrate": "tsx src/db/migrate.ts",
     "sync": "tsx src/jobs/sync.ts",
     "brief": "tsx src/jobs/brief.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test src/**/*.test.ts"
+    "test": "node --import tsx --test src/**/*.test.ts",
+    "worker": "tsx src/jobs/worker.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",
