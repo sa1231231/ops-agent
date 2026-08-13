@@ -107,6 +107,19 @@ const STYLE = `
   .actions { display: flex; gap: .5rem; flex-wrap: wrap; }
   .actions form { margin: 0; display: flex; flex-direction: column; gap: .3rem; }
   .caption { font-size: .72rem; opacity: .45; }
+  td.act { text-align: right; white-space: nowrap; }
+  td.act form { margin: 0; }
+  .linkbtn {
+    background: none; border: 0; padding: 0; color: #b91c1c;
+    font: inherit; font-size: .82rem; cursor: pointer; text-decoration: underline;
+  }
+  @media (prefers-color-scheme: dark) { .linkbtn { color: #f87171; } }
+  a.link { font-size: .82rem; }
+  select {
+    padding: .5rem .65rem; font: inherit; font-size: .9rem;
+    border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+    border-radius: 6px; background: Canvas; color: CanvasText;
+  }
   button:disabled { opacity: .4; cursor: not-allowed; }
   button.danger { background: #b91c1c; color: #fff; }
   .job {
@@ -181,6 +194,7 @@ export function renderAccountsPage(
   notice: AdminNotice | null = null,
   jobs: JobPanel | null = null,
   lastSynced: Date | null = null,
+  briefHourValue = 6,
 ): string {
   const rows = accounts
     .map((account) => {
@@ -197,6 +211,14 @@ export function renderAccountsPage(
           </td>
           <td>${relativeTime(account.last_sync_at)}</td>
           <td>${relativeTime(account.connected_at)}</td>
+          <td class="act">${
+            account.status === "disabled"
+              ? `<a class="link" href="/connect">Reconnect</a>`
+              : `<form method="post" action="/accounts/disconnect">
+                   <input type="hidden" name="account_id" value="${account.id}">
+                   <button type="submit" class="linkbtn">Disconnect</button>
+                 </form>`
+          }</td>
         </tr>`;
     })
     .join("");
@@ -248,19 +270,13 @@ export function renderAccountsPage(
         ? `<div class="empty">No accounts connected yet.</div>`
         : `<table>
              <thead>
-               <tr><th>Account</th><th>Status</th><th>Last sync</th><th>Connected</th></tr>
+               <tr><th>Account</th><th>Status</th><th>Last sync</th><th>Connected</th><th></th></tr>
              </thead>
              <tbody>${rows}</tbody>
            </table>`
     }
 
     <a class="btn" href="/connect">Connect account</a>
-
-    <p class="note">
-      Read-only access to Gmail and Calendar. Reconnecting an account in
-      <span class="pill bad">auth error</span> repairs it — the morning brief keeps
-      working meanwhile and names any account it had to skip.
-    </p>
 
     <section class="settings">
       <h2>Morning brief</h2>
@@ -280,6 +296,23 @@ export function renderAccountsPage(
         <p class="hint">
           E.164 format. A bare 10-digit US number is accepted and normalised.
           ${recipient ? "" : "Falling back to <code>CLIENT_SMS_NUMBER</code> until set."}
+        </p>
+      </form>
+
+      <form method="post" action="/settings" style="margin-top:1.4rem">
+        <label for="hour">Sent at</label>
+        <div class="row">
+          <select id="hour" name="brief_hour">
+            ${Array.from({ length: 24 }, (_, h) => {
+              const label = `${String(h).padStart(2, "0")}:00`;
+              return `<option value="${h}"${h === briefHourValue ? " selected" : ""}>${label}</option>`;
+            }).join("")}
+          </select>
+          <button type="submit">Save</button>
+        </div>
+        <p class="hint">
+          ${escapeHtml(BRIEF_TZ)}, adjusted for daylight saving automatically.
+          The worker runs hourly, so the brief goes out at the top of this hour.
         </p>
       </form>
     </section>

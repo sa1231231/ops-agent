@@ -1,4 +1,4 @@
-import { pool } from "../pool.js";
+import { pool, withTransaction } from "../pool.js";
 import { encrypt } from "../../auth/crypto.js";
 import type { TokenSet } from "../../auth/google.js";
 
@@ -97,4 +97,48 @@ export async function lastSyncedAt(): Promise<Date | null> {
     "select max(last_sync_at) as at from accounts",
   );
   return rows[0]?.at ?? null;
+}
+
+/**
+ * Disconnects an account and erases what was read from it.
+ *
+ * The row itself stays, marked `disabled`, so the console keeps a record and so
+ * reconnecting the same address later is an ordinary upsert rather than a
+ * conflict. Everything derived from the mailbox goes: messages, threads, the
+ * correspondent graph, and calendar events — "no longer using it" has to mean
+ * the data stops influencing ranking, not just that syncing stops.
+ *
+ * gmail_history_id is cleared too, so a future reconnect cold-starts cleanly
+ * instead of resuming from a cursor whose messages were deleted.
+ */
+export async function disconnectAccount(accountId: number): Promise<void> {
+  await withTransaction(async (client) => {
+    await client.query("delete from messages where account_id = $1", [accountId]);
+    await client.query("delete from threads where account_id = $1", [accountId]);
+    await client.query("delete from correspondents where account_id = $1", [accountId]);
+    await client.query("delete from events where account_id = $1", [accountId]);
+    await client.query(
+      `update accounts
+          set status = 'disabled',
+              access_token_enc = null,
+              refresh_token_enc = null,
+              token_expires_at = null,
+              gmail_history_id = null,
+              last_error = null,
+              last_sync_at = null,
+              updated_at = now()
+        where id = $1`,
+      [accountId],
+    );
+  });
+}
+
+export async function getAccountTokens(
+  accountId: number,
+): Promise<{ email: string; refresh_token_enc: string | null } | null> {
+  const { rows } = await pool.query<{ email: string; refresh_token_enc: string | null }>(
+    "select email, refresh_token_enc from accounts where id = $1",
+    [accountId],
+  );
+  return rows[0] ?? null;
 }

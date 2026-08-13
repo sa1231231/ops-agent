@@ -134,3 +134,25 @@ export async function fetchUserEmail(accessToken: string): Promise<string> {
   }
   return json.email.toLowerCase();
 }
+
+/**
+ * Asks Google to revoke the grant.
+ *
+ * Best-effort: the local disconnect must succeed regardless. But telling Google
+ * is the difference between "we stopped looking" and the access actually being
+ * gone, and it means the entry disappears from his Google account permissions
+ * rather than lingering there.
+ */
+export async function revokeToken(refreshToken: string): Promise<boolean> {
+  try {
+    const res = await fetch("https://oauth2.googleapis.com/revoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: refreshToken }),
+    });
+    // 400 usually means it was already revoked or expired, which is fine.
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

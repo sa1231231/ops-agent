@@ -10,6 +10,8 @@ import { pool } from "../pool.js";
 export const SETTING_KEYS = {
   /** Where the morning brief is delivered. */
   briefRecipient: "brief_recipient_sms",
+  /** Local hour (0-23) the brief goes out. */
+  briefHour: "brief_hour",
 } as const;
 
 export async function getSetting(key: string): Promise<string | null> {
@@ -60,4 +62,25 @@ export function normalizePhoneNumber(raw: string): string {
 export async function briefRecipient(envFallback: string): Promise<string> {
   const configured = await getSetting(SETTING_KEYS.briefRecipient);
   return configured ?? envFallback;
+}
+
+/**
+ * The hour the brief is sent, preferring the console-configured value.
+ *
+ * Hour granularity, because the worker runs hourly — a half-past setting would
+ * silently fire up to an hour late, which is worse than not offering it.
+ */
+export async function briefHour(envFallback: number): Promise<number> {
+  const raw = await getSetting(SETTING_KEYS.briefHour);
+  if (raw === null) return envFallback;
+  const hour = Number.parseInt(raw, 10);
+  return Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : envFallback;
+}
+
+export function normalizeHour(raw: string): string {
+  const hour = Number.parseInt(raw.trim(), 10);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+    throw new Error(`"${raw}" is not a valid hour. Choose 0-23.`);
+  }
+  return String(hour);
 }

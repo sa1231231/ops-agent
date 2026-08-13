@@ -1,17 +1,27 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { HOST, PORT, PUBLIC_BASE_URL, requireEnv } from "../config.js";
+import { BRIEF_HOUR } from "../time.js";
 import { assertEncryptionReady } from "../auth/crypto.js";
 import { pool } from "../db/pool.js";
-import { lastSyncedAt, listAccounts } from "../db/queries/accounts.js";
+import {
+  disconnectAccount,
+  getAccountTokens,
+  lastSyncedAt,
+  listAccounts,
+} from "../db/queries/accounts.js";
+import { decrypt } from "../auth/crypto.js";
+import { revokeToken } from "../auth/google.js";
 import {
   countBriefs,
   getBriefByToken,
   listBriefs,
 } from "../db/queries/briefs.js";
 import {
+  briefHour,
   deleteSetting,
   getSetting,
+  normalizeHour,
   normalizePhoneNumber,
   setSetting,
   SETTING_KEYS,
@@ -90,18 +100,28 @@ async function handleSettingsPost(
   }
 
   const form = await readFormBody(req);
-  const raw = (form.get(SETTING_KEYS.briefRecipient) ?? "").trim();
 
   let query: string;
   try {
-    if (raw === "") {
-      await deleteSetting(SETTING_KEYS.briefRecipient);
-      query = "?saved=cleared";
+    // One endpoint, two independent forms: each posts only its own field, so
+    // saving the hour must not wipe the recipient.
+    if (form.has(SETTING_KEYS.briefHour)) {
+      await setSetting(
+        SETTING_KEYS.briefHour,
+        normalizeHour(form.get(SETTING_KEYS.briefHour) ?? ""),
+      );
+      query = "?saved=" + encodeURIComponent("Brief time saved.");
     } else {
-      // Validating on save turns a bad number into a form error instead of a
-      // failed brief at 6:30am.
-      await setSetting(SETTING_KEYS.briefRecipient, normalizePhoneNumber(raw));
-      query = "?saved=1";
+      const raw = (form.get(SETTING_KEYS.briefRecipient) ?? "").trim();
+      if (raw === "") {
+        await deleteSetting(SETTING_KEYS.briefRecipient);
+        query = "?saved=cleared";
+      } else {
+        // Validating on save turns a bad number into a form error instead of a
+        // failed brief at 6am.
+        await setSetting(SETTING_KEYS.briefRecipient, normalizePhoneNumber(raw));
+        query = "?saved=1";
+      }
     }
   } catch (err) {
     query = `?error=${encodeURIComponent(err instanceof Error ? err.message : "Invalid value")}`;
@@ -166,12 +186,59 @@ async function handleRunPost(
   res.end();
 }
 
+/**
+ * Disconnects an account: revokes at Google, then erases everything read from
+ * it. The row survives, marked disabled, so reconnecting the same address later
+ * is an ordinary upsert.
+ */
+async function handleDisconnectPost(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  if (!sameOrigin(req)) {
+    res.writeHead(403, { "Content-Type": "text/plain" });
+    res.end("Cross-origin form posts are refused\n");
+    return;
+  }
+
+  const form = await readFormBody(req);
+  const accountId = Number.parseInt(form.get("account_id") ?? "", 10);
+  if (!Number.isInteger(accountId)) {
+    res.writeHead(303, { Location: "/?error=Invalid+account" });
+    res.end();
+    return;
+  }
+
+  const account = await getAccountTokens(accountId);
+
+  // Best effort, and deliberately before the local wipe: telling Google is what
+  // makes the access actually gone rather than merely unused. A failure here
+  // must not block the disconnect.
+  let revoked = false;
+  if (account?.refresh_token_enc) {
+    try {
+      revoked = await revokeToken(decrypt(account.refresh_token_enc));
+    } catch (err) {
+      console.error("[disconnect] revoke failed:", err instanceof Error ? err.message : err);
+    }
+  }
+
+  await disconnectAccount(accountId);
+
+  const note = `Disconnected ${account?.email ?? "account"}${
+    revoked ? " and revoked access at Google" : ""
+  }. Stored mail and calendar data erased.`;
+  res.writeHead(303, { Location: `/?saved=${encodeURIComponent(note)}` });
+  res.end();
+}
+
 async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", PUBLIC_BASE_URL);
   const path = url.pathname;
 
   if (req.method === "POST") {
-    if (path !== "/settings" && path !== "/run/sync" && path !== "/run/brief") {
+    const postPaths = ["/settings", "/run/sync", "/run/brief", "/accounts/disconnect"];
+    if (!postPaths.includes(path)) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("Not found\n");
       return;
@@ -182,6 +249,8 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     }
     if (path === "/settings") {
       await handleSettingsPost(req, res);
+    } else if (path === "/accounts/disconnect") {
+      await handleDisconnectPost(req, res);
     } else {
       await handleRunPost(path, req, res);
     }
@@ -253,10 +322,11 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
           ? { ok: true, message: saved === "1" ? "Saved." : saved }
           : null;
 
-    const [accounts, recipient, synced] = await Promise.all([
+    const [accounts, recipient, synced, hour] = await Promise.all([
       listAccounts(),
       getSetting(SETTING_KEYS.briefRecipient),
       lastSyncedAt(),
+      briefHour(BRIEF_HOUR),
     ]);
 
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -267,6 +337,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         notice,
         { sync: jobState("sync"), brief: jobState("brief") },
         synced,
+        hour,
       ),
     );
     return;

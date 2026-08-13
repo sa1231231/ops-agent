@@ -60,6 +60,10 @@ from events e
 join accounts a on a.id = e.account_id
 where e.starts_at >= $1::timestamptz
   and e.starts_at <  $2::timestamptz
+  -- A disconnected account must stop influencing the brief, not just stop
+  -- syncing. Its events are deleted on disconnect; this guards the window
+  -- between disconnect and the next run.
+  and a.status <> 'disabled' 
 group by coalesce(e.ical_uid, e.gcal_event_id), e.starts_at, e.ical_uid, e.gcal_event_id
 order by e.starts_at
 `;

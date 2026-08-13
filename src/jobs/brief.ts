@@ -9,7 +9,7 @@ import {
   pruneOldBriefs,
   saveBriefItems,
 } from "../db/queries/briefs.js";
-import { briefRecipient } from "../db/queries/settings.js";
+import { briefHour, briefRecipient } from "../db/queries/settings.js";
 import { formatSkippedAccounts, notifyOperator } from "../outputs/operatorEmail.js";
 import { renderPlainText, estimateSegments } from "../outputs/render.js";
 import { deliveryChannel, sendSms } from "../outputs/sms.js";
@@ -70,8 +70,11 @@ export async function runBrief(
 
   // Railway cron is UTC, so the job fires hourly and gates on his local hour.
   // This survives DST without a twice-yearly adjustment.
-  if (!force && localHour(now) !== BRIEF_HOUR) {
-    const message = `Not ${BRIEF_HOUR}:00 local (it is ${localHour(now)}:00) — nothing to do`;
+  // The configured hour wins; the env var is only a fallback for a fresh
+  // deployment where nobody has opened the console yet.
+  const targetHour = await briefHour(BRIEF_HOUR);
+  if (!force && localHour(now) !== targetHour) {
+    const message = `Not ${targetHour}:00 local (it is ${localHour(now)}:00) — nothing to do`;
     console.log(`[brief] ${message}`);
     return { status: "not-due", message };
   }
