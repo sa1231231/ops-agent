@@ -6,7 +6,7 @@
 
 ## What this is
 
-A personal operations agent for a single user. It reads across ~15 Gmail accounts and calendars spanning several Google Workspace domains plus personal Gmail, works out what matters, and sends one WhatsApp message each morning.
+A personal operations agent for a single user. It reads across ~15 Gmail accounts and calendars spanning several Google Workspace domains plus personal Gmail, works out what matters, and sends one text message each morning.
 
 The message contains:
 
@@ -27,10 +27,10 @@ Named vaguely on purpose. Single user, no public signup, no marketing site. Spee
 | **Read-only.** Gmail + Calendar read scopes only. The system never sends, moves, deletes, or modifies anything. | No `gmail.send`, `gmail.modify`, or Calendar write scopes anywhere. Enforced by a single scope constant. |
 | **OAuth for every account.** No domain-wide delegation. Workspace and personal go through the identical flow and are stored identically. | One code path in `src/auth/`. No per-domain branching, ever. |
 | **Partial failure never suppresses the brief.** One dead account, the other fourteen still report, with a note about what was skipped. | Per-account isolation via `Promise.allSettled`; the brief renders from whatever is in Postgres; skipped accounts are named in the message. |
-| **Failures alert the operator, not the client.** | Email to operator + admin console status. Never touches the client's WhatsApp. |
+| **Failures alert the operator, not the client.** | Email to operator + admin console status. Never touches the client's phone. |
 | **Not a fixed 24-hour window.** Recency is not importance — a six-day-old unanswered email outranks this morning's noise. | Scoring is thread-state-based. The age curve peaks at 2–7 days rather than decaying from now. |
 | **Cold start looks back 7 days maximum. Never backfill the inbox.** | Hard constant `COLD_START_DAYS = 7` plus a per-account message cap. There are thousands of unread messages in there and none of them are today's problem. |
-| **Minimal UI.** One admin page, server-rendered, no framework, no build step. Everything else is the WhatsApp message. | Template literals + `node:http`/express. (TypeScript still compiles — that's a toolchain step, not a frontend build.) |
+| **Minimal UI.** Server-rendered, no framework, no build step. Everything else is the text message. | Template literals + `node:http`/express. (TypeScript still compiles — that's a toolchain step, not a frontend build.) |
 
 ---
 
@@ -38,7 +38,9 @@ Named vaguely on purpose. Single user, no public signup, no marketing site. Spee
 
 Append here when a decision is made or reversed. Include the reasoning — the *why* is the part that stops a future session from undoing it.
 
-**1. Brief format — approved WhatsApp template with single-line slots + link.**
+**1. Brief format — SMS, superseding the WhatsApp template.**
+WhatsApp was the original choice and the eleven-slot template exists in `outputs/whatsapp.ts`, but SMS is what ships. Both need a one-time registration; the difference is that a WhatsApp template needs **re-approval for every layout change**, and template parameters cannot contain newlines. Since the format keeps changing as ranking improves, that recurring gate costs more than it saves. Original reasoning kept below for context:
+
 WhatsApp business-initiated messages outside a 24-hour session window require a Meta-approved template, and **template variables cannot contain newlines**. The morning brief is definitionally business-initiated (the client will not have messaged in the prior 24h), so free-form text is not an option. The layout lives in the approved skeleton; each variable carries one line. A signed link to the full brief page carries the depth. Cost: changing the layout requires Meta re-approval.
 
 **2. Sender graph — Sent metadata only, 90 days, at cold start.**
@@ -51,7 +53,9 @@ Error content is inherently variable (account names, error strings) and cannot b
 The schema is small and this keeps the toolchain trivial, in the spirit of the no-build-step constraint.
 
 **5. Sync is decoupled from delivery.**
-A sync worker runs every ~20 minutes all day writing to Postgres; the morning job only reads Postgres and sends. A Gmail outage at 6:29am cannot kill the brief, and thread state accumulates over days so "unanswered for six days" is a fact in the database rather than something inferred at send time.
+A worker runs hourly writing to Postgres; the brief job only reads Postgres and sends. A Gmail outage minutes before the brief cannot kill it, and thread state accumulates over days so "unanswered for six days" is a fact in the database rather than something inferred at send time.
+
+Hourly is not about completeness — the Gmail history cursor picks up everything since the last successful run, so one sync a day would capture the same messages. It is about not letting a single failed sync ship a brief built on yesterday's data, which would look entirely normal and be wrong.
 
 **6. Direct commits to `main`. No pull requests.**
 Single developer.
@@ -64,7 +68,7 @@ Single developer.
 - **Postgres on Railway** — dev and prod instances both there, connection string from env. Nothing runs on the dev box except the code and Claude Code.
 - **Railway hosting** — one repo, two services: a web service and a cron worker
 - **Anthropic API** — `claude-opus-5` for ranking and composition
-- **Twilio WhatsApp** — delivery
+- **Twilio SMS** — delivery (WhatsApp kept behind `DELIVERY_CHANNEL`, unused)
 
 ---
 
@@ -77,10 +81,9 @@ src/
   sources/    gmail.ts, calendar.ts        → normalize into Postgres
   signals/    weights.ts, score.ts         → pure functions over DB rows
   ranking/    candidates.ts, compose.ts    → prefilter, then one LLM call
-  outputs/    whatsapp.ts, operatorEmail.ts
-  web/        server.ts, admin.ts, oauth.ts, briefPage.ts
-  jobs/       sync.ts, brief.ts
-  ops/        log.ts, alert.ts
+  outputs/    sms.ts, render.ts, whatsapp.ts, operatorEmail.ts
+  web/        server.ts, admin.ts, oauth.ts, briefPage.ts, briefsPage.ts, scoringPage.ts, jobs.ts
+  jobs/       sync.ts, brief.ts, worker.ts
 ```
 
 The `sources → signals → ranking → outputs` split is what keeps this from becoming a digest-only codebase. `signals/` scores threads with **no knowledge of "today"**; a future search capability calls the same scorer with a different candidate set.
@@ -94,7 +97,7 @@ The `sources → signals → ranking → outputs` split is what keeps this from 
 - **`threads`** — account_id, gmail_thread_id, subject, `last_inbound_at`, `last_outbound_at`, `awaiting_reply`, participants[] · UNIQUE(account_id, gmail_thread_id)
 - **`correspondents`** — PK(account_id, email), outbound_count, inbound_count, last_outbound_at, last_inbound_at — *the sender graph*
 - **`events`** — account_id, gcal_event_id, calendar_id, title, description, starts_at, ends_at, all_day, attendees jsonb, organizer_email, self_response_status, status · UNIQUE(account_id, gcal_event_id)
-- **`briefs`** — `local_date UNIQUE`, payload jsonb, status, message_sid, sent_at, share_token, share_expires_at
+- **`briefs`** — local_date (indexed, **not** unique — several per day allowed), payload jsonb (composed brief + rendered text + scoring snapshot), status, message_sid, sent_at, share_token, share_expires_at
 - **`brief_items`** — brief_id, kind, ref_key, rank, reason, `first_seen_brief_date` — *carry-over state*
 - **`sync_runs`** — account_id, source, started_at, finished_at, status, error, counts jsonb
 
