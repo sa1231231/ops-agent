@@ -1,0 +1,28 @@
+{
+  "name": "ops-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/web/server.ts",
+    "build": "tsc",
+    "start": "node dist/web/server.js",
+    "migrate": "tsx src/db/migrate.ts",
+    "sync": "tsx src/jobs/sync.ts",
+    "brief": "tsx src/jobs/brief.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/pg": "^8.11.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
