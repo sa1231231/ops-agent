@@ -16,6 +16,20 @@ export function optionalEnv(name: string, fallback: string): string {
 }
 
 export const PORT = Number(optionalEnv("PORT", "3000"));
+
+/**
+ * Loopback by default. This runs on a public VPS, and binding to all interfaces
+ * would put the admin console on the open internet behind nothing but Basic auth
+ * over plain HTTP. Reach it locally over an SSH tunnel instead:
+ *
+ *   ssh -L 3000:localhost:3000 <user>@<host>
+ *
+ * That also keeps the OAuth redirect URI on localhost, which is the only host
+ * for which Google permits a plain http:// redirect.
+ *
+ * Railway terminates TLS and routes to the container, so set HOST=0.0.0.0 there.
+ */
+export const HOST = optionalEnv("HOST", "127.0.0.1");
 export const PUBLIC_BASE_URL = optionalEnv(
   "PUBLIC_BASE_URL",
   `http://localhost:${PORT}`,

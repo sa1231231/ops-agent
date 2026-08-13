@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { PORT, PUBLIC_BASE_URL, requireEnv } from "../config.js";
+import { HOST, PORT, PUBLIC_BASE_URL, requireEnv } from "../config.js";
 import { assertEncryptionReady } from "../auth/crypto.js";
 import { pool } from "../db/pool.js";
 import { listAccounts } from "../db/queries/accounts.js";
@@ -100,8 +100,11 @@ async function main(): Promise<void> {
   requireEnv("OAUTH_REDIRECT_URI");
   await pool.query("select 1");
 
-  server.listen(PORT, () => {
-    console.log(`[web] listening on ${PUBLIC_BASE_URL}`);
+  server.listen(PORT, HOST, () => {
+    console.log(`[web] listening on ${HOST}:${PORT} (${PUBLIC_BASE_URL})`);
+    if (HOST === "127.0.0.1") {
+      console.log(`[web] loopback only — tunnel in with: ssh -L ${PORT}:localhost:${PORT} <user>@<host>`);
+    }
   });
 }
 
