@@ -4,7 +4,9 @@ import { HOST, PORT, PUBLIC_BASE_URL, requireEnv } from "../config.js";
 import { assertEncryptionReady } from "../auth/crypto.js";
 import { pool } from "../db/pool.js";
 import { listAccounts } from "../db/queries/accounts.js";
+import { getBriefByToken } from "../db/queries/briefs.js";
 import { renderAccountsPage } from "./admin.js";
+import { renderBriefPage, type BriefPayload } from "./briefPage.js";
 import { handleCallback, handleConnect } from "./oauth.js";
 
 /**
@@ -56,6 +58,36 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
 
   if (path === "/oauth/callback") {
     await handleCallback(url, res);
+    return;
+  }
+
+  // The brief page is linked from the message and must open without a login —
+  // he reads it on a phone at 6:30am. The token is unguessable and expiring, and
+  // grants nothing beyond one already-composed brief.
+  const briefMatch = /^\/brief\/([A-Za-z0-9_-]{16,64})$/.exec(path);
+  if (briefMatch?.[1]) {
+    const brief = await getBriefByToken(briefMatch[1]);
+    if (!brief?.payload) {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not found\n");
+      return;
+    }
+    const { rows } = await pool.query<{ skipped_accounts: string[] }>(
+      "select skipped_accounts from briefs where id = $1",
+      [brief.id],
+    );
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "private, no-store",
+      "Referrer-Policy": "no-referrer",
+    });
+    res.end(
+      renderBriefPage(
+        brief.local_date,
+        brief.payload as BriefPayload,
+        rows[0]?.skipped_accounts ?? [],
+      ),
+    );
     return;
   }
 

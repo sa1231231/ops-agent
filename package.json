@@ -19,8 +19,11 @@
     "test": "node --import tsx --test src/**/*.test.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.116.0",
     "dotenv": "^16.4.5",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "resend": "^6.19.0",
+    "twilio": "^6.1.0"
   },
   "devDependencies": {
     "@railway/cli": "^5.38.0",
