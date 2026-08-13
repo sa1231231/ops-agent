@@ -7,7 +7,6 @@ import {
   markBriefFailed,
   markBriefSent,
   pruneOldBriefs,
-  releaseBrief,
   saveBriefItems,
 } from "../db/queries/briefs.js";
 import { briefRecipient } from "../db/queries/settings.js";
@@ -27,8 +26,22 @@ import { BRIEF_HOUR, localDateString, localHour } from "../time.js";
  * this reads. A Gmail outage at 6:29am therefore cannot cost him his 6:30 brief.
  */
 
-const DRY_RUN = optionalEnv("DRY_RUN", "") === "1";
-const FORCE = optionalEnv("FORCE", "") === "1" || process.argv.includes("--force");
+const ENV_DRY_RUN = optionalEnv("DRY_RUN", "") === "1";
+const ENV_FORCE = optionalEnv("FORCE", "") === "1" || process.argv.includes("--force");
+
+export interface BriefRunOptions {
+  /** Render and discard. Repeatable, and records nothing. */
+  dryRun?: boolean;
+  /** Ignore the BRIEF_HOUR gate — used by the console's manual trigger. */
+  force?: boolean;
+}
+
+export interface BriefRunResult {
+  status: "sent" | "preview" | "skipped" | "not-due";
+  message: string;
+  text?: string;
+  briefUrl?: string;
+}
 
 interface SkippedAccount {
   email: string;
@@ -47,27 +60,34 @@ async function skippedAccounts(): Promise<SkippedAccount[]> {
   }));
 }
 
-export async function runBrief(now = new Date()): Promise<void> {
+export async function runBrief(
+  now = new Date(),
+  options: BriefRunOptions = {},
+): Promise<BriefRunResult> {
+  const dryRun = options.dryRun ?? ENV_DRY_RUN;
+  const force = options.force ?? ENV_FORCE;
   const localDate = localDateString(now);
 
   // Railway cron is UTC, so the job fires hourly and gates on his local hour.
   // This survives DST without a twice-yearly adjustment.
-  if (!FORCE && localHour(now) !== BRIEF_HOUR) {
-    console.log(
-      `[brief] not ${BRIEF_HOUR}:00 local (it is ${localHour(now)}:00) — nothing to do`,
-    );
-    return;
+  if (!force && localHour(now) !== BRIEF_HOUR) {
+    const message = `Not ${BRIEF_HOUR}:00 local (it is ${localHour(now)}:00) — nothing to do`;
+    console.log(`[brief] ${message}`);
+    return { status: "not-due", message };
   }
 
-  // The insert is the lock. Checking first would leave a window where two
-  // workers both see "no brief yet" and both send.
-  const brief = await claimBrief(localDate);
-  if (!brief) {
+  // A preview claims nothing. It has to stay usable after the day's real brief
+  // has gone out — that is precisely when you want to see what a weight change
+  // would have produced — so it must not contend for the idempotency row.
+  //
+  // For a real send the insert *is* the lock. Checking first would leave a
+  // window where two workers both see "no brief yet" and both send.
+  const brief = dryRun ? null : await claimBrief(localDate);
+  if (!dryRun && !brief) {
     const existing = await getBrief(localDate);
-    console.log(
-      `[brief] ${localDate} already ${existing?.status ?? "claimed"} — not sending again`,
-    );
-    return;
+    const message = `${localDate} was already ${existing?.status ?? "claimed"} — not sending again`;
+    console.log(`[brief] ${message}`);
+    return { status: "skipped", message };
   }
 
   try {
@@ -95,7 +115,9 @@ export async function runBrief(now = new Date()): Promise<void> {
       skippedAccounts: skippedEmails,
     });
 
-    const briefUrl = `${PUBLIC_BASE_URL}/brief/${brief.share_token}`;
+    const briefUrl = brief
+      ? `${PUBLIC_BASE_URL}/brief/${brief.share_token}`
+      : `${PUBLIC_BASE_URL}/brief/(preview)`;
     const text = renderPlainText(composed, {
       localDate,
       briefUrl,
@@ -109,14 +131,14 @@ export async function runBrief(now = new Date()): Promise<void> {
 
     let messageSid: string | null = null;
 
-    if (DRY_RUN) {
+    if (dryRun) {
       console.log("\n----- DRY RUN, not sending -----\n" + text + "\n--------------------------------\n");
-      // Side-effect free and repeatable: release the day's claim and write no
-      // carry-over rows, so a dry run cannot make tomorrow believe an item was
-      // already reported.
-      await releaseBrief(brief.id);
-      console.log("[brief] dry run — claim released, nothing recorded");
-      return;
+      console.log("[brief] dry run — nothing claimed, nothing recorded");
+      return {
+        status: "preview",
+        message: `Preview for ${localDate} — ${candidates.length} candidates, nothing sent or recorded`,
+        text,
+      };
     }
 
     if (channel === "sms") {
@@ -137,7 +159,7 @@ export async function runBrief(now = new Date()): Promise<void> {
     // Carry-over depends on these rows: tomorrow's "still open, day 2" is only
     // correct if today was recorded.
     await saveBriefItems(
-      brief.id,
+      brief!.id,
       composed.emails.map((e, i) => ({
         kind: "email",
         refKey: e.thread_key,
@@ -147,7 +169,7 @@ export async function runBrief(now = new Date()): Promise<void> {
       })),
     );
 
-    await markBriefSent(brief.id, { composed, text, briefUrl }, messageSid, skippedEmails);
+    await markBriefSent(brief!.id, { composed, text, briefUrl }, messageSid, skippedEmails);
 
     if (skipped.length > 0) {
       await notifyOperator(formatSkippedAccounts(skipped));
@@ -159,9 +181,18 @@ export async function runBrief(now = new Date()): Promise<void> {
     if (pruned > 0) console.log(`[brief] pruned ${pruned} brief(s) past retention`);
 
     console.log(`[brief] done — ${briefUrl}${messageSid ? ` (sid ${messageSid})` : ""}`);
+
+    return {
+      status: "sent",
+      message: messageSid
+        ? `Sent for ${localDate} (sid ${messageSid})`
+        : `Recorded for ${localDate}; delivery channel is "${channel}", nothing sent`,
+      text,
+      briefUrl,
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await markBriefFailed(brief.id, { error: message });
+    if (brief) await markBriefFailed(brief.id, { error: message });
     await notifyOperator({
       subject: `Brief failed for ${localDate}`,
       body: `The morning brief could not be sent.\n\n${message}`,

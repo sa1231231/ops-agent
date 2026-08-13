@@ -84,3 +84,17 @@ export async function markAccountError(
     [accountId, message.slice(0, 1000)],
   );
 }
+
+/**
+ * Most recent successful sync across all accounts.
+ *
+ * Read from the accounts table rather than the in-memory job state so it
+ * survives a restart and reflects the scheduled worker too, not just runs
+ * triggered from the console.
+ */
+export async function lastSyncedAt(): Promise<Date | null> {
+  const { rows } = await pool.query<{ at: Date | null }>(
+    "select max(last_sync_at) as at from accounts",
+  );
+  return rows[0]?.at ?? null;
+}

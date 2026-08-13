@@ -1,4 +1,6 @@
 import type { Account } from "../db/queries/accounts.js";
+import { BRIEF_TZ } from "../time.js";
+import type { JobState } from "./jobs.js";
 
 /** Everything rendered here is server-side; there is no client JS and no build. */
 
@@ -102,6 +104,24 @@ const STYLE = `
   .ok-note { font-size: .82rem; color: #15803d; margin: .55rem 0 0; }
   @media (prefers-color-scheme: dark) { .ok-note { color: #4ade80; } }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .95em; }
+  .actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+  .actions form { margin: 0; display: flex; flex-direction: column; gap: .3rem; }
+  .caption { font-size: .72rem; opacity: .45; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.danger { background: #b91c1c; color: #fff; }
+  .job {
+    margin-top: 1rem; padding: .75rem .9rem; border-radius: 8px;
+    border: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+  }
+  .job-head { display: flex; align-items: center; gap: .6rem; }
+  .job-when { margin-left: auto; font-size: .78rem; opacity: .5; }
+  .job-sum { font-size: .85rem; opacity: .75; margin-top: .45rem; }
+  pre.preview {
+    margin: .6rem 0 0; padding: .7rem .85rem; border-radius: 6px; overflow-x: auto;
+    background: color-mix(in srgb, CanvasText 6%, transparent);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .78rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+  }
 `;
 
 export interface AdminNotice {
@@ -109,10 +129,58 @@ export interface AdminNotice {
   message: string;
 }
 
+export interface JobPanel {
+  sync: JobState;
+  brief: JobState;
+}
+
+function relativeAgo(date: Date | null): string {
+  return date ? relativeTime(date) : "never";
+}
+
+/** Absolute timestamp plus relative age: one answers "when", the other "how stale". */
+function lastSyncedLabel(at: Date | null): string {
+  if (!at) return "Never synced";
+  const stamp = new Intl.DateTimeFormat("en-CA", {
+    timeZone: BRIEF_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(at);
+  return `Last synced ${stamp} (${relativeTime(at)})`;
+}
+
+function renderJob(name: string, label: string, job: JobState): string {
+  const status = job.running
+    ? `<span class="pill warn">running…</span>`
+    : job.error
+      ? `<span class="pill bad">failed</span>`
+      : job.summary
+        ? `<span class="pill ok">ok</span>`
+        : `<span class="pill off">idle</span>`;
+
+  return `
+    <div class="job">
+      <div class="job-head">
+        <strong>${escapeHtml(label)}</strong>
+        ${status}
+        <span class="job-when">${escapeHtml(relativeAgo(job.finishedAt ?? job.startedAt))}</span>
+      </div>
+      ${job.error ? `<div class="err">${escapeHtml(job.error)}</div>` : ""}
+      ${job.summary ? `<div class="job-sum">${escapeHtml(job.summary)}</div>` : ""}
+      ${job.detail ? `<pre class="preview">${escapeHtml(job.detail)}</pre>` : ""}
+    </div>`;
+}
+
 export function renderAccountsPage(
   accounts: Account[],
   recipient: string | null = null,
   notice: AdminNotice | null = null,
+  jobs: JobPanel | null = null,
+  lastSynced: Date | null = null,
 ): string {
   const rows = accounts
     .map((account) => {
@@ -134,6 +202,32 @@ export function renderAccountsPage(
     .join("");
 
   const active = accounts.filter((a) => a.status === "active").length;
+  const busy = Boolean(jobs && (jobs.sync.running || jobs.brief.running));
+
+  const jobSection = jobs
+    ? `
+    <section class="settings">
+      <h2>Run now</h2>
+      <div class="actions">
+        <form method="post" action="/run/sync">
+          <button type="submit" ${jobs.sync.running ? "disabled" : ""}>Sync accounts</button>
+          <div class="caption">${escapeHtml(lastSyncedLabel(lastSynced))}</div>
+        </form>
+        <form method="post" action="/run/brief">
+          <input type="hidden" name="mode" value="preview">
+          <button type="submit" ${busy ? "disabled" : ""}>Preview brief</button>
+          <div class="caption">Composes and discards</div>
+        </form>
+        <form method="post" action="/run/brief">
+          <input type="hidden" name="mode" value="send">
+          <button type="submit" class="danger" ${busy ? "disabled" : ""}>Send brief now</button>
+          <div class="caption">Real SMS, once per day</div>
+        </form>
+      </div>
+      ${renderJob("sync", "Sync", jobs.sync)}
+      ${renderJob("brief", "Brief", jobs.brief)}
+    </section>`
+    : "";
 
   return `<!doctype html>
 <html lang="en">
@@ -141,6 +235,7 @@ export function renderAccountsPage(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ops-agent</title>
+  ${busy ? '<meta http-equiv="refresh" content="4">' : ""}
   <style>${STYLE}</style>
 </head>
 <body>
@@ -188,6 +283,7 @@ export function renderAccountsPage(
         </p>
       </form>
     </section>
+    ${jobSection}
   </main>
 </body>
 </html>`;

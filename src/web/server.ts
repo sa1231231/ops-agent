@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { HOST, PORT, PUBLIC_BASE_URL, requireEnv } from "../config.js";
 import { assertEncryptionReady } from "../auth/crypto.js";
 import { pool } from "../db/pool.js";
-import { listAccounts } from "../db/queries/accounts.js";
+import { lastSyncedAt, listAccounts } from "../db/queries/accounts.js";
 import {
   countBriefs,
   getBriefByToken,
@@ -17,6 +17,7 @@ import {
   SETTING_KEYS,
 } from "../db/queries/settings.js";
 import { renderAccountsPage, type AdminNotice } from "./admin.js";
+import { jobState, startJob } from "./jobs.js";
 import { renderBriefPage, type BriefPayload } from "./briefPage.js";
 import { BRIEFS_PER_PAGE, renderBriefsPage } from "./briefsPage.js";
 import { handleCallback, handleConnect } from "./oauth.js";
@@ -111,12 +112,66 @@ async function handleSettingsPost(
   res.end();
 }
 
+/**
+ * Starts a job and redirects immediately.
+ *
+ * These take far longer than a request should — a cold-start sync across
+ * fifteen mailboxes is minutes, and the brief waits on a model call — so the
+ * work runs in the background and the console polls by refreshing itself.
+ */
+async function handleRunPost(
+  path: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  if (!sameOrigin(req)) {
+    res.writeHead(403, { "Content-Type": "text/plain" });
+    res.end("Cross-origin form posts are refused\n");
+    return;
+  }
+
+  const form = await readFormBody(req);
+  let started: boolean;
+  let label: string;
+
+  if (path === "/run/sync") {
+    label = "Sync";
+    started = startJob("sync", async () => {
+      const { syncAll } = await import("../jobs/sync.js");
+      const summary = await syncAll();
+      return {
+        summary:
+          `${summary.synced.length} account(s) synced` +
+          (summary.skipped.length ? `, ${summary.skipped.length} skipped` : ""),
+        detail: summary.skipped.length
+          ? summary.skipped.map((s) => `${s.email}: ${s.reason}`).join("\n")
+          : undefined,
+      };
+    });
+  } else {
+    const preview = form.get("mode") !== "send";
+    label = preview ? "Preview" : "Send";
+    started = startJob("brief", async () => {
+      const { runBrief } = await import("../jobs/brief.js");
+      // force: the console button means "now", not "if it happens to be 6am".
+      const result = await runBrief(new Date(), { dryRun: preview, force: true });
+      return { summary: result.message, detail: result.text };
+    });
+  }
+
+  const notice = started
+    ? `${label} started`
+    : `${label} is already running`;
+  res.writeHead(303, { Location: `/?saved=${encodeURIComponent(notice)}` });
+  res.end();
+}
+
 async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", PUBLIC_BASE_URL);
   const path = url.pathname;
 
   if (req.method === "POST") {
-    if (path !== "/settings") {
+    if (path !== "/settings" && path !== "/run/sync" && path !== "/run/brief") {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("Not found\n");
       return;
@@ -125,7 +180,11 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       challenge(res);
       return;
     }
-    await handleSettingsPost(req, res);
+    if (path === "/settings") {
+      await handleSettingsPost(req, res);
+    } else {
+      await handleRunPost(path, req, res);
+    }
     return;
   }
 
@@ -191,16 +250,25 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       : saved === "cleared"
         ? { ok: true, message: "Recipient cleared — falling back to CLIENT_SMS_NUMBER." }
         : saved
-          ? { ok: true, message: "Saved." }
+          ? { ok: true, message: saved === "1" ? "Saved." : saved }
           : null;
 
-    const [accounts, recipient] = await Promise.all([
+    const [accounts, recipient, synced] = await Promise.all([
       listAccounts(),
       getSetting(SETTING_KEYS.briefRecipient),
+      lastSyncedAt(),
     ]);
 
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(renderAccountsPage(accounts, recipient, notice));
+    res.end(
+      renderAccountsPage(
+        accounts,
+        recipient,
+        notice,
+        { sync: jobState("sync"), brief: jobState("brief") },
+        synced,
+      ),
+    );
     return;
   }
 
