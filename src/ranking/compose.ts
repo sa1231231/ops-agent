@@ -9,10 +9,9 @@ import type { Conflict, Meeting } from "./meetings.js";
  * One model call per morning. The deterministic pre-filter has already decided
  * *what* is important; the model decides how to say it.
  *
- * It never formats the message. It returns structured fields, and a
- * deterministic renderer maps those into template slots — because WhatsApp
- * template parameters cannot contain newlines, and a model that occasionally
- * emits one would break delivery rather than look untidy.
+ * It never formats the message. It returns structured fields and a separate
+ * renderer decides how they read, so the layout can change without re-prompting
+ * and two runs over the same data produce identical text.
  */
 
 const MODEL = "claude-opus-5";
@@ -73,11 +72,12 @@ const OUTPUT_SCHEMA = {
 
 const SYSTEM = `You write a single morning brief for one busy operator who runs his work across about fifteen email accounts and calendars.
 
-He reads this on WhatsApp, once, before his day starts. It should tell him what actually needs him today and nothing else.
+He reads this as a text message, once, before his day starts. It should tell him what actually needs him today and nothing else.
 
 How to write it:
 
-- Every field is a SINGLE LINE. Never use newlines, bullet characters, or markdown. WhatsApp template parameters reject newlines outright.
+- Every field is a SINGLE LINE. Never use newlines, bullet characters, or markdown.
+- Keep every line short. Meetings and conflicts under 150 characters; each email line and each priority under 110. This is read on a phone, and anything longer is cut off. Write to the limit rather than being truncated at it.
 - Be specific and concrete. "Eric needs the contract redline" beats "follow up on outstanding items".
 - Name people, not addresses. "Eric Kalman" not "eric@kalman.com".
 - Do not pad. If only two emails genuinely need him, return two. An honest short brief is worth more than a padded long one.
@@ -187,13 +187,27 @@ ${
 }`;
 }
 
-/** Strips anything that would break a WhatsApp template parameter. */
+/**
+ * Collapses to a single line and trims to length.
+ *
+ * Truncation happens at a word boundary. A hard slice produced "the 10:30
+ * standup leaves no p" in the first real brief, which reads as a bug to the
+ * person receiving it even though the content was right.
+ */
 export function sanitizeLine(value: string, maxLength = 240): string {
-  return value
+  const flat = value
     .replace(/[\r\n\t]+/g, " ")
     .replace(/\s{2,}/g, " ")
-    .trim()
-    .slice(0, maxLength);
+    .trim();
+
+  if (flat.length <= maxLength) return flat;
+
+  const cut = flat.slice(0, maxLength - 1);
+  const lastSpace = cut.lastIndexOf(" ");
+  // Only back off to a word boundary if one is reasonably close, so a single
+  // very long token does not collapse the whole line to an ellipsis.
+  const trimmed = lastSpace > maxLength * 0.6 ? cut.slice(0, lastSpace) : cut;
+  return `${trimmed.replace(/[,;:.\s]+$/, "")}…`;
 }
 
 export async function composeBrief(input: ComposeInput): Promise<ComposedBrief> {
@@ -228,8 +242,8 @@ export async function composeBrief(input: ComposeInput): Promise<ComposedBrief> 
   );
 
   return {
-    meetings_line: sanitizeLine(parsed.meetings_line ?? ""),
-    conflicts_line: sanitizeLine(parsed.conflicts_line ?? ""),
+    meetings_line: sanitizeLine(parsed.meetings_line ?? "", 180),
+    conflicts_line: sanitizeLine(parsed.conflicts_line ?? "", 180),
     emails: (parsed.emails ?? [])
       // A hallucinated thread_key would render a line pointing at nothing.
       .filter((e) => knownKeys.has(e.thread_key))
@@ -239,6 +253,6 @@ export async function composeBrief(input: ComposeInput): Promise<ComposedBrief> 
         line: sanitizeLine(e.line, 110),
         reason: sanitizeLine(e.reason, 60),
       })),
-    priorities: (parsed.priorities ?? []).slice(0, 3).map((p) => sanitizeLine(p, 110)),
+    priorities: (parsed.priorities ?? []).slice(0, 3).map((p) => sanitizeLine(p, 130)),
   };
 }

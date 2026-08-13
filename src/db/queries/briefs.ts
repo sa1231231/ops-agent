@@ -41,6 +41,19 @@ export async function claimBrief(localDate: string): Promise<BriefRow | null> {
   return rows[0] ?? null;
 }
 
+/**
+ * Releases a claim without recording anything.
+ *
+ * A dry run must be side-effect free and repeatable: it should neither consume
+ * the day's only send nor write carry-over rows that would make tomorrow claim
+ * an item was already reported.
+ */
+export async function releaseBrief(briefId: number): Promise<void> {
+  await pool.query("delete from briefs where id = $1 and status = 'pending'", [
+    briefId,
+  ]);
+}
+
 export async function getBrief(localDate: string): Promise<BriefRow | null> {
   const { rows } = await pool.query<BriefRow>(
     `select id, local_date, status, share_token, payload, sent_at

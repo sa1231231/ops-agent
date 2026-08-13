@@ -15,8 +15,14 @@ import { estimateSegments } from "./render.js";
  * message can "send" successfully and never arrive.
  */
 
-/** Guard against a runaway brief costing a hundred segments. */
-const MAX_SEGMENTS = 12;
+/**
+ * Guard against a runaway brief, not against normal length.
+ *
+ * Emoji put the message in UCS-2, which drops segments from 153 to 67
+ * characters, so a typical brief lands near 13. The ceiling exists to catch a
+ * composition bug that produces something enormous, not to police wording.
+ */
+const MAX_SEGMENTS = 24;
 
 export async function sendSms(body: string, to?: string): Promise<string> {
   const recipient = to ?? optionalEnv("CLIENT_SMS_NUMBER", "");

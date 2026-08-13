@@ -6,6 +6,7 @@ import {
   getBrief,
   markBriefFailed,
   markBriefSent,
+  releaseBrief,
   saveBriefItems,
 } from "../db/queries/briefs.js";
 import { briefRecipient } from "../db/queries/settings.js";
@@ -109,7 +110,15 @@ export async function runBrief(now = new Date()): Promise<void> {
 
     if (DRY_RUN) {
       console.log("\n----- DRY RUN, not sending -----\n" + text + "\n--------------------------------\n");
-    } else if (channel === "sms") {
+      // Side-effect free and repeatable: release the day's claim and write no
+      // carry-over rows, so a dry run cannot make tomorrow believe an item was
+      // already reported.
+      await releaseBrief(brief.id);
+      console.log("[brief] dry run — claim released, nothing recorded");
+      return;
+    }
+
+    if (channel === "sms") {
       // Console-configured recipient wins; the env var is only a fallback so a
       // fresh deployment can deliver before anyone opens the console.
       messageSid = await sendSms(
@@ -124,8 +133,8 @@ export async function runBrief(now = new Date()): Promise<void> {
       console.log("[brief] DELIVERY_CHANNEL=none — rendered and stored, not sent");
     }
 
-    // Carry-over depends on these rows, so they are written even on a dry run:
-    // tomorrow's "still open, day 2" is only correct if today was recorded.
+    // Carry-over depends on these rows: tomorrow's "still open, day 2" is only
+    // correct if today was recorded.
     await saveBriefItems(
       brief.id,
       composed.emails.map((e, i) => ({

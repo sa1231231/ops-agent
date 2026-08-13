@@ -18,7 +18,7 @@ import { handleCallback, handleConnect } from "./oauth.js";
 
 /**
  * Admin console: server-rendered, no framework, no client JS, no build step.
- * Everything else the client ever sees is the WhatsApp message.
+ * Everything else the client ever sees is the morning message.
  */
 
 /** Constant-time compare over digests, so inputs of any length are safe. */
