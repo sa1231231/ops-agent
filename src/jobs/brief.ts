@@ -2,8 +2,7 @@ import { BRIEF_RETENTION_DAYS, optionalEnv, PUBLIC_BASE_URL } from "../config.js
 import { pool } from "../db/pool.js";
 import {
   carriedOverItems,
-  claimBrief,
-  getBrief,
+  createBrief,
   markBriefFailed,
   markBriefSent,
   pruneOldBriefs,
@@ -37,7 +36,7 @@ export interface BriefRunOptions {
 }
 
 export interface BriefRunResult {
-  status: "sent" | "preview" | "skipped" | "not-due";
+  status: "sent" | "preview" | "not-due";
   message: string;
   text?: string;
   briefUrl?: string;
@@ -79,19 +78,10 @@ export async function runBrief(
     return { status: "not-due", message };
   }
 
-  // A preview claims nothing. It has to stay usable after the day's real brief
-  // has gone out — that is precisely when you want to see what a weight change
-  // would have produced — so it must not contend for the idempotency row.
-  //
-  // For a real send the insert *is* the lock. Checking first would leave a
-  // window where two workers both see "no brief yet" and both send.
-  const brief = dryRun ? null : await claimBrief(localDate);
-  if (!dryRun && !brief) {
-    const existing = await getBrief(localDate);
-    const message = `${localDate} was already ${existing?.status ?? "claimed"} — not sending again`;
-    console.log(`[brief] ${message}`);
-    return { status: "skipped", message };
-  }
+  // A preview records nothing at all; a real send always creates a row. There
+  // is deliberately no one-per-day lock — the hour gate is what stops the
+  // scheduler firing twice, and a test send must not consume the day's slot.
+  const brief = dryRun ? null : await createBrief(localDate);
 
   try {
     const [meetings, candidates, carried, skipped] = await Promise.all([
@@ -172,7 +162,27 @@ export async function runBrief(
       })),
     );
 
-    await markBriefSent(brief!.id, { composed, text, briefUrl }, messageSid, skippedEmails);
+    // Snapshot why these were chosen. The live /scoring page recomputes from
+    // current data, which cannot answer "why did Tuesday's brief pick that" —
+    // messages and the correspondent graph have moved on since.
+    const scoring = candidates.map((t) => ({
+      threadKey: `${t.candidate.accountId}:${t.candidate.gmailThreadId}`,
+      subject: t.candidate.subject,
+      from: t.candidate.fromEmail,
+      score: Math.round(t.score),
+      signals: t.signals.map((sig) => ({
+        name: sig.name,
+        points: Math.round(sig.points),
+        detail: sig.detail ?? null,
+      })),
+    }));
+
+    await markBriefSent(
+      brief!.id,
+      { composed, text, briefUrl, scoring },
+      messageSid,
+      skippedEmails,
+    );
 
     if (skipped.length > 0) {
       await notifyOperator(formatSkippedAccounts(skipped));

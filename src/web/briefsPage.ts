@@ -93,8 +93,8 @@ function renderCard(brief: BriefSummary): string {
 
   const body = c
     ? `
-      ${c.meetings_line ? `<div class="line">📅 ${escapeHtml(c.meetings_line)}</div>` : ""}
-      ${c.conflicts_line ? `<div class="line">⚠️ ${escapeHtml(c.conflicts_line)}</div>` : ""}
+      ${c.meetings_line ? `<div class="line">${escapeHtml(c.meetings_line)}</div>` : ""}
+      ${c.conflicts_line ? `<div class="line"><strong>Conflicts:</strong> ${escapeHtml(c.conflicts_line)}</div>` : ""}
       ${
         c.emails.length
           ? `<div class="label">Needs you (${c.emails.length})</div>
@@ -130,7 +130,7 @@ function renderCard(brief: BriefSummary): string {
       ${body}
       ${
         brief.skipped_accounts?.length
-          ? `<div class="skipped">⚠️ Skipped: ${escapeHtml(brief.skipped_accounts.join(", "))}</div>`
+          ? `<div class="skipped">Skipped: ${escapeHtml(brief.skipped_accounts.join(", "))}</div>`
           : ""
       }
       <div class="foot">

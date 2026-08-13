@@ -171,6 +171,12 @@ One call to `claude-opus-5`. Adaptive thinking (on by default on Opus 5), `effor
 
 > `temperature` is **removed** on Opus 5 (sending it returns a 400). Stability comes from the deterministic prefilter, deterministic tie-breaks, the fixed output schema, and carry-over — not from a sampling knob.
 
+### Seeing why — `/scoring`
+
+The admin console has a live scoring view: every candidate, its score, which signals fired with their point values, and whether it cleared the floor. It recomputes from current data, so a weight change is visible on reload.
+
+Each sent brief also stores a `scoring` snapshot in its payload, because the live page cannot answer "why did Tuesday's brief pick that" — the mail and the correspondent graph have moved on since.
+
 ### Carry-over is what earns trust
 
 Items from yesterday's `brief_items` that are still unanswered are passed into the prompt as already-reported, hold their position band, and are labelled *"still open — day 3"*. Without this, the same email reappears each morning as if new and the brief reads as noise.
@@ -217,9 +223,17 @@ Full brief → {{11}}
 
 Every variable is a single line — **no newlines are permitted in template params**. `{{10}}` carries the skipped-accounts note (*"Skipped: acme.com (auth expired)"*) or an empty-safe placeholder. `{{11}}` is the signed brief-page URL.
 
-### Idempotency
+### SMS and GSM-7
 
-`briefs.local_date` is UNIQUE. The job inserts `ON CONFLICT DO NOTHING`, then sends only if status is still pending. A cron retry cannot double-send.
+SMS is the live channel; WhatsApp is kept behind `DELIVERY_CHANNEL` but unused.
+
+**The message contains no emoji, and `toGsm7()` strips everything outside printable ASCII.** This is a cost decision, not an aesthetic one: a single character outside GSM-7 switches the whole message to UCS-2, dropping the segment size from 153 characters to 67 and roughly doubling the bill. Emoji are the obvious culprit but an em dash or curly apostrophe does it just as thoroughly, and the model emits those constantly. Measured: the same brief is 11 segments with one emoji, 5 without.
+
+### Repeat sends
+
+There is deliberately **no one-per-day lock**. `briefs.local_date` was UNIQUE and doubled as an idempotency gate, which meant a manual test send consumed the day's slot and blocked the scheduled one — unworkable while ranking and format are being tuned.
+
+What prevents accidental repeats now: the brief only fires when the local hour matches the configured hour, and the worker runs once per hour, so the scheduler reaches the send path at most once a day. The remaining exposure is a manual **Send brief now** colliding with a scheduled run in the same hour, which sends twice. That is accepted for now.
 
 ### Timezone / DST
 

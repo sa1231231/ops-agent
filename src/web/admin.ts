@@ -254,7 +254,7 @@ export function renderAccountsPage(
 </head>
 <body>
   <main>
-    <header><h1>ops-agent</h1><a class="nav" href="/briefs">Brief history →</a></header>
+    <header><h1>ops-agent</h1><a class="nav" href="/scoring">Scoring →</a><a class="nav" href="/briefs" style="margin-left:1rem">Brief history →</a></header>
     <div class="sub">${active} of ${accounts.length} account${accounts.length === 1 ? "" : "s"} healthy</div>
 
     ${

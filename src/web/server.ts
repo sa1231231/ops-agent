@@ -30,6 +30,8 @@ import { renderAccountsPage, type AdminNotice } from "./admin.js";
 import { jobState, startJob } from "./jobs.js";
 import { renderBriefPage, type BriefPayload } from "./briefPage.js";
 import { BRIEFS_PER_PAGE, renderBriefsPage } from "./briefsPage.js";
+import { renderScoringPage } from "./scoringPage.js";
+import { scoreAllCandidates } from "../ranking/candidates.js";
 import { handleCallback, handleConnect } from "./oauth.js";
 
 /**
@@ -356,6 +358,12 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
 
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(renderBriefsPage(briefs, page, total));
+    return;
+  }
+
+  if (path === "/scoring") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(renderScoringPage(await scoreAllCandidates()));
     return;
   }
 

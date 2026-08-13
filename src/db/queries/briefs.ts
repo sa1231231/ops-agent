@@ -4,9 +4,9 @@ import { pool } from "../pool.js";
 /**
  * Brief persistence and carry-over.
  *
- * `local_date` is UNIQUE, which is the idempotency gate: a cron retry, a
- * redeploy mid-run, or two workers racing cannot produce two WhatsApp messages
- * in one day.
+ * Several briefs per local date are allowed — a manual test send must not block
+ * the scheduled one. What stops accidental repeats is the hour gate in the job,
+ * not a constraint here.
  */
 
 export interface BriefRow {
@@ -25,39 +25,28 @@ export interface CarriedItem {
 }
 
 /**
- * Claims today's brief, or returns null if one already exists.
+ * Records a new brief.
  *
- * The insert is the lock. Checking-then-inserting would leave a window where
- * two workers both see "no brief yet" and both send.
+ * No longer one-per-day: the hour gate is what stops the scheduler sending
+ * twice, and while ranking is being tuned, a manual send must not consume the
+ * day's slot and block the real one.
  */
-export async function claimBrief(localDate: string): Promise<BriefRow | null> {
+export async function createBrief(localDate: string): Promise<BriefRow> {
   const { rows } = await pool.query<BriefRow>(
     `insert into briefs (local_date, status, share_token, share_expires_at)
      values ($1, 'pending', $2, now() + interval '30 days')
-     on conflict (local_date) do nothing
      returning id, local_date::text as local_date, status, share_token, payload, sent_at`,
     [localDate, randomBytes(24).toString("base64url")],
   );
-  return rows[0] ?? null;
-}
-
-/**
- * Releases a claim without recording anything.
- *
- * A dry run must be side-effect free and repeatable: it should neither consume
- * the day's only send nor write carry-over rows that would make tomorrow claim
- * an item was already reported.
- */
-export async function releaseBrief(briefId: number): Promise<void> {
-  await pool.query("delete from briefs where id = $1 and status = 'pending'", [
-    briefId,
-  ]);
+  const row = rows[0];
+  if (!row) throw new Error("createBrief returned no row");
+  return row;
 }
 
 export async function getBrief(localDate: string): Promise<BriefRow | null> {
   const { rows } = await pool.query<BriefRow>(
     `select id, local_date::text as local_date, status, share_token, payload, sent_at
-       from briefs where local_date = $1`,
+       from briefs where local_date = $1 order by id desc limit 1`,
     [localDate],
   );
   return rows[0] ?? null;
@@ -181,7 +170,7 @@ export async function listBriefs(
     `select id, local_date::text as local_date, status, sent_at, message_sid,
             share_token, skipped_accounts, payload
        from briefs
-      order by local_date desc
+      order by local_date desc, id desc
       limit $1 offset $2`,
     [limit, offset],
   );
