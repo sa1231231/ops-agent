@@ -310,10 +310,7 @@ export function renderAccountsPage(
           </select>
           <button type="submit">Save</button>
         </div>
-        <p class="hint">
-          ${escapeHtml(BRIEF_TZ)}, adjusted for daylight saving automatically.
-          The worker runs hourly, so the brief goes out at the top of this hour.
-        </p>
+        <p class="hint">${escapeHtml(BRIEF_TZ)}</p>
       </form>
     </section>
     ${jobSection}
