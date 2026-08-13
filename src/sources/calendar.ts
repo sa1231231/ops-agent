@@ -20,6 +20,8 @@ export const LOOKAHEAD_DAYS = 7;
 
 export interface NormalizedEvent {
   gcalEventId: string;
+  /** Stable across every calendar the same meeting lands on. */
+  icalUid: string | null;
   calendarId: string;
   title: string | null;
   description: string | null;
@@ -34,6 +36,7 @@ export interface NormalizedEvent {
 
 interface RawEvent {
   id: string;
+  iCalUID?: string;
   summary?: string;
   description?: string;
   status?: string;
@@ -65,6 +68,7 @@ function normalizeEvent(raw: RawEvent, calendarId: string): NormalizedEvent {
   const self = raw.attendees?.find((a) => a.self);
   return {
     gcalEventId: raw.id,
+    icalUid: raw.iCalUID ?? null,
     calendarId,
     title: raw.summary ?? null,
     description: raw.description ?? null,

@@ -179,6 +179,14 @@ Items from yesterday's `brief_items` that are still unanswered are passed into t
 
 Interval overlap computed across the **merged** set of all ~15 calendars, normalized to one timezone — precisely the pain that fifteen calendars create. Also flag zero-gap back-to-backs and agenda-less meetings.
 
+**Deduplicate on `(ical_uid, starts_at)` before computing overlap. Both halves of that key are load-bearing.**
+
+`iCalUID` is stable for a meeting across every calendar it lands on, so the same meeting invited to several of his accounts appears once per account. Without dedup, interval overlap reports it as conflicting with itself — the loudest possible false positive in a feature whose entire job is flagging real conflicts.
+
+But `iCalUID` is **also shared across every occurrence of a recurring event**. Deduping on `ical_uid` alone therefore collapses a week of daily standups into one meeting and silently drops real conflicts involving later occurrences. Verified against live data: 62 rows dedupe to 61 true meetings on `(ical_uid, starts_at)`, versus 34 on `ical_uid` alone.
+
+All-day events are excluded from overlap entirely — an all-day marker overlaps everything.
+
 ---
 
 ## Delivery

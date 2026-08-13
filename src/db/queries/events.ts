@@ -2,7 +2,7 @@ import { pool } from "../pool.js";
 import type { NormalizedEvent } from "../../sources/calendar.js";
 
 const CHUNK = 100;
-const COLUMNS = 12;
+const COLUMNS = 13;
 
 export async function upsertEvents(
   accountId: number,
@@ -20,12 +20,16 @@ export async function upsertEvents(
     chunk.forEach((e, i) => {
       const p = i * COLUMNS;
       tuples.push(
+        // $10 is `attendees` and must be cast — the parameter positions shifted
+        // by one when ical_uid was added, and an off-by-one here silently casts
+        // the wrong column.
         `($${p + 1},$${p + 2},$${p + 3},$${p + 4},$${p + 5},$${p + 6},` +
-          `$${p + 7},$${p + 8},$${p + 9}::jsonb,$${p + 10},$${p + 11},$${p + 12})`,
+          `$${p + 7},$${p + 8},$${p + 9},$${p + 10}::jsonb,$${p + 11},$${p + 12},$${p + 13})`,
       );
       values.push(
         accountId,
         e.gcalEventId,
+        e.icalUid,
         e.calendarId,
         e.title,
         e.description,
@@ -41,12 +45,13 @@ export async function upsertEvents(
 
     const { rowCount } = await pool.query(
       `insert into events (
-         account_id, gcal_event_id, calendar_id, title, description,
+         account_id, gcal_event_id, ical_uid, calendar_id, title, description,
          starts_at, ends_at, all_day, attendees, organizer_email,
          self_response_status, status
        )
        values ${tuples.join(",")}
        on conflict (account_id, gcal_event_id) do update set
+         ical_uid             = excluded.ical_uid,
          calendar_id          = excluded.calendar_id,
          title                = excluded.title,
          description          = excluded.description,

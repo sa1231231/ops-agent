@@ -8,8 +8,10 @@
   },
   "scripts": {
     "dev": "tsx watch src/web/server.ts",
-    "build": "tsc",
-    "start": "node dist/web/server.js",
+    "build": "tsc && cp -R src/db/migrations dist/db/",
+    "start": "npm run start:web",
+    "start:web": "node dist/db/migrate.js && node dist/web/server.js",
+    "start:worker": "node dist/jobs/sync.js",
     "migrate": "tsx src/db/migrate.ts",
     "sync": "tsx src/jobs/sync.ts",
     "brief": "tsx src/jobs/brief.ts",
