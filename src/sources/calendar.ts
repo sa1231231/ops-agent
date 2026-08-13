@@ -1,16 +1,22 @@
+import { addDays, startOfLocalDay } from "../time.js";
 import { googleFetch } from "./googleApi.js";
 
 const BASE = "https://www.googleapis.com/calendar/v3";
 
 /**
- * Calendar window: the prior two days through the end of tomorrow.
+ * Calendar window: the prior two days through a week ahead, in *his* timezone.
  *
  * The lookback is deliberate. A meeting yesterday with nothing sent since is an
  * action item, and "lots of meetings the days prior" is half the problem this
  * system exists to solve.
+ *
+ * The lookahead is wider than the brief needs on purpose. The morning message
+ * only reports today, but storing a week means "you have a demo Thursday and no
+ * agenda yet" is answerable, and a future capability that has nothing to do with
+ * mornings does not need a schema change to see next week.
  */
 export const LOOKBACK_DAYS = 2;
-export const LOOKAHEAD_DAYS = 1;
+export const LOOKAHEAD_DAYS = 7;
 
 export interface NormalizedEvent {
   gcalEventId: string;
@@ -81,29 +87,40 @@ function normalizeEvent(raw: RawEvent, calendarId: string): NormalizedEvent {
   };
 }
 
+/**
+ * Google-generated subscription calendars. These carry no meetings — only
+ * all-day markers — and would put "Labor Day" in a list of today's meetings.
+ */
+const SUBSCRIPTION_CALENDAR = /#(holiday|contacts|weeknum|sports)@/;
+
 export async function listCalendarIds(accessToken: string): Promise<string[]> {
   const res = await googleFetch<{ items?: CalendarListEntry[] }>(
     `${BASE}/users/me/calendarList?minAccessRole=reader&showDeleted=false`,
     accessToken,
   );
   return (res.items ?? [])
-    // `selected` reflects what the user actually has visible. Unselected
-    // calendars are typically subscriptions — holidays, sports, birthdays —
-    // and would flood the conflict detector with noise.
-    .filter((c) => !c.deleted && (c.primary || c.selected !== false))
+    .filter(
+      (c) =>
+        !c.deleted &&
+        !SUBSCRIPTION_CALENDAR.test(c.id) &&
+        // `selected` reflects what he actually has visible in Gmail.
+        (c.primary || c.selected !== false),
+    )
     .map((c) => c.id);
 }
 
+/**
+ * Boundaries are local midnights, not UTC midnights. At 8pm in New York the UTC
+ * date has already rolled over, so a UTC-floored window points at the wrong day
+ * for a third of every day.
+ */
 export function calendarWindow(now = new Date()): { timeMin: Date; timeMax: Date } {
-  const timeMin = new Date(now);
-  timeMin.setUTCDate(timeMin.getUTCDate() - LOOKBACK_DAYS);
-  timeMin.setUTCHours(0, 0, 0, 0);
-
-  const timeMax = new Date(now);
-  timeMax.setUTCDate(timeMax.getUTCDate() + LOOKAHEAD_DAYS + 1);
-  timeMax.setUTCHours(0, 0, 0, 0);
-
-  return { timeMin, timeMax };
+  const today = startOfLocalDay(now);
+  return {
+    timeMin: addDays(today, -LOOKBACK_DAYS),
+    // Exclusive upper bound at the local midnight *after* the last day we want.
+    timeMax: addDays(today, LOOKAHEAD_DAYS + 1),
+  };
 }
 
 export async function fetchEvents(

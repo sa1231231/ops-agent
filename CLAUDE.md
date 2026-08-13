@@ -131,7 +131,13 @@ Known tradeoff: Gmail's categorizer is occasionally wrong, and a real message mi
 
 **Incremental:** `users.history.list` against the stored `gmail_history_id`. On 404 (history expired, gap >~1 week), fall back to a bounded `newer_than:2d` resync and reset the cursor. **Never widen to a full scan on error.**
 
-**Calendar:** events for today, tomorrow, and the **prior two days** across all accounts. The lookback is deliberate — a meeting yesterday with no follow-up since is an action item.
+**Calendar:** events from the **prior two days through a week ahead**, across all accounts.
+
+The lookback is deliberate — a meeting yesterday with no follow-up since is an action item. The lookahead is wider than the brief needs on purpose: the morning message reports today, but storing a week makes "you have a demo Thursday and no agenda yet" answerable without a schema change, per the rule against hard-coding daily-digest assumptions.
+
+**Window boundaries are local midnights in `BRIEF_TZ`, never UTC midnights** (`src/time.ts`). At 8pm in New York the UTC date has already rolled over, so a UTC-floored window silently points at the wrong day for a third of every day. Offsets come from `Intl`, so DST needs no special handling.
+
+Google-generated subscription calendars (`#holiday@`, `#contacts@`, `#weeknum@`, `#sports@`) are excluded — they contain all-day markers, not meetings, and would put "Labor Day" in a list of today's meetings.
 
 **Isolation:** `Promise.allSettled` per account; every attempt writes a `sync_runs` row. One dead account is a row, not an exception.
 
