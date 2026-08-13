@@ -1,5 +1,6 @@
 import { pool } from "../db/pool.js";
 import { notifyOperator } from "../outputs/operatorEmail.js";
+import { briefHour } from "../db/queries/settings.js";
 import { BRIEF_HOUR, BRIEF_TZ, localHour } from "../time.js";
 import { runBrief } from "./brief.js";
 import { syncAll } from "./sync.js";
@@ -50,9 +51,12 @@ async function main(): Promise<void> {
   const result = await runBrief();
   console.log(`[worker] brief: ${result.status} — ${result.message}`);
 
+  // Read the configured hour, not the env fallback: the gate uses the console
+  // setting, and a log line that disagrees with the gate is worse than none.
+  const configuredHour = await briefHour(BRIEF_HOUR);
   console.log(
     `[worker] done in ${((Date.now() - started) / 1000).toFixed(1)}s ` +
-      `(${localHour()}:00 ${BRIEF_TZ}, brief hour is ${BRIEF_HOUR}:00)`,
+      `(${localHour()}:00 ${BRIEF_TZ}, brief hour is ${configuredHour}:00)`,
   );
 
   // A sync that died outright is worth a non-zero exit so the platform shows the
