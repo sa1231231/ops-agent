@@ -18,7 +18,15 @@ import { estimateSegments } from "./render.js";
 /** Guard against a runaway brief costing a hundred segments. */
 const MAX_SEGMENTS = 12;
 
-export async function sendSms(body: string): Promise<string> {
+export async function sendSms(body: string, to?: string): Promise<string> {
+  const recipient = to ?? optionalEnv("CLIENT_SMS_NUMBER", "");
+  if (!recipient) {
+    throw new Error(
+      "No brief recipient configured. Set one in the admin console, or " +
+        "CLIENT_SMS_NUMBER as a fallback.",
+    );
+  }
+
   const segments = estimateSegments(body);
   if (segments > MAX_SEGMENTS) {
     throw new Error(
@@ -34,7 +42,7 @@ export async function sendSms(body: string): Promise<string> {
 
   const message = await client.messages.create({
     from: requireEnv("TWILIO_SMS_FROM"),
-    to: requireEnv("CLIENT_SMS_NUMBER"),
+    to: recipient,
     body,
   });
 

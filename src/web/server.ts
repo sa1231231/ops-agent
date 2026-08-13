@@ -5,7 +5,14 @@ import { assertEncryptionReady } from "../auth/crypto.js";
 import { pool } from "../db/pool.js";
 import { listAccounts } from "../db/queries/accounts.js";
 import { getBriefByToken } from "../db/queries/briefs.js";
-import { renderAccountsPage } from "./admin.js";
+import {
+  deleteSetting,
+  getSetting,
+  normalizePhoneNumber,
+  setSetting,
+  SETTING_KEYS,
+} from "../db/queries/settings.js";
+import { renderAccountsPage, type AdminNotice } from "./admin.js";
 import { renderBriefPage, type BriefPayload } from "./briefPage.js";
 import { handleCallback, handleConnect } from "./oauth.js";
 
@@ -38,12 +45,87 @@ function challenge(res: ServerResponse): void {
   res.end("Authentication required\n");
 }
 
+/**
+ * Basic auth credentials are cached by the browser and replayed on cross-origin
+ * form posts, so authentication alone does not stop CSRF. Requiring a matching
+ * Origin does, and costs nothing for a same-origin form.
+ */
+function sameOrigin(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  if (!origin) return false;
+  try {
+    return new URL(origin).origin === new URL(PUBLIC_BASE_URL).origin;
+  } catch {
+    return false;
+  }
+}
+
+const MAX_BODY_BYTES = 8 * 1024;
+
+async function readFormBody(req: IncomingMessage): Promise<URLSearchParams> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    total += (chunk as Buffer).length;
+    if (total > MAX_BODY_BYTES) throw new Error("Request body too large");
+    chunks.push(chunk as Buffer);
+  }
+  return new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
+}
+
+async function handleSettingsPost(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  if (!sameOrigin(req)) {
+    res.writeHead(403, { "Content-Type": "text/plain" });
+    res.end("Cross-origin form posts are refused\n");
+    return;
+  }
+
+  const form = await readFormBody(req);
+  const raw = (form.get(SETTING_KEYS.briefRecipient) ?? "").trim();
+
+  let query: string;
+  try {
+    if (raw === "") {
+      await deleteSetting(SETTING_KEYS.briefRecipient);
+      query = "?saved=cleared";
+    } else {
+      // Validating on save turns a bad number into a form error instead of a
+      // failed brief at 6:30am.
+      await setSetting(SETTING_KEYS.briefRecipient, normalizePhoneNumber(raw));
+      query = "?saved=1";
+    }
+  } catch (err) {
+    query = `?error=${encodeURIComponent(err instanceof Error ? err.message : "Invalid value")}`;
+  }
+
+  // POST-redirect-GET, so a refresh does not resubmit.
+  res.writeHead(303, { Location: `/${query}` });
+  res.end();
+}
+
 async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", PUBLIC_BASE_URL);
   const path = url.pathname;
 
+  if (req.method === "POST") {
+    if (path !== "/settings") {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not found\n");
+      return;
+    }
+    if (!isAuthorized(req)) {
+      challenge(res);
+      return;
+    }
+    await handleSettingsPost(req, res);
+    return;
+  }
+
   if (req.method !== "GET") {
-    res.writeHead(405, { Allow: "GET" });
+    res.writeHead(405, { Allow: "GET, POST" });
     res.end();
     return;
   }
@@ -97,9 +179,23 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   }
 
   if (path === "/") {
-    const html = renderAccountsPage(await listAccounts());
+    const saved = url.searchParams.get("saved");
+    const error = url.searchParams.get("error");
+    const notice: AdminNotice | null = error
+      ? { ok: false, message: error }
+      : saved === "cleared"
+        ? { ok: true, message: "Recipient cleared — falling back to CLIENT_SMS_NUMBER." }
+        : saved
+          ? { ok: true, message: "Saved." }
+          : null;
+
+    const [accounts, recipient] = await Promise.all([
+      listAccounts(),
+      getSetting(SETTING_KEYS.briefRecipient),
+    ]);
+
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(html);
+    res.end(renderAccountsPage(accounts, recipient, notice));
     return;
   }
 

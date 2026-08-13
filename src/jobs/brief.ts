@@ -8,6 +8,7 @@ import {
   markBriefSent,
   saveBriefItems,
 } from "../db/queries/briefs.js";
+import { briefRecipient } from "../db/queries/settings.js";
 import { formatSkippedAccounts, notifyOperator } from "../outputs/operatorEmail.js";
 import { renderPlainText, estimateSegments } from "../outputs/render.js";
 import { deliveryChannel, sendSms } from "../outputs/sms.js";
@@ -109,7 +110,12 @@ export async function runBrief(now = new Date()): Promise<void> {
     if (DRY_RUN) {
       console.log("\n----- DRY RUN, not sending -----\n" + text + "\n--------------------------------\n");
     } else if (channel === "sms") {
-      messageSid = await sendSms(text);
+      // Console-configured recipient wins; the env var is only a fallback so a
+      // fresh deployment can deliver before anyone opens the console.
+      messageSid = await sendSms(
+        text,
+        await briefRecipient(optionalEnv("CLIENT_SMS_NUMBER", "")),
+      );
     } else if (channel === "whatsapp") {
       messageSid = await sendWhatsApp(
         buildTemplateVariables(composed, { localDate, briefUrl, skippedAccounts: skippedEmails }),

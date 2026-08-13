@@ -77,9 +77,41 @@ const STYLE = `
   }
   .empty { padding: 2.5rem 0; opacity: .6; }
   .note { margin-top: 2.5rem; font-size: .8rem; opacity: .55; max-width: 62ch; }
+  .settings {
+    margin-top: 2.5rem; padding-top: 1.75rem;
+    border-top: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+  }
+  .settings h2 {
+    font-size: .72rem; text-transform: uppercase; letter-spacing: .06em;
+    opacity: .55; margin: 0 0 .9rem; font-weight: 700;
+  }
+  label { display: block; font-size: .85rem; margin-bottom: .35rem; }
+  .row { display: flex; gap: .5rem; max-width: 420px; }
+  input {
+    flex: 1; padding: .5rem .65rem; font: inherit; font-size: .9rem;
+    border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+    border-radius: 6px; background: Canvas; color: CanvasText;
+  }
+  button {
+    padding: .5rem .95rem; font: inherit; font-size: .875rem; font-weight: 600;
+    border: 0; border-radius: 6px; background: CanvasText; color: Canvas; cursor: pointer;
+  }
+  .hint { font-size: .78rem; opacity: .5; margin: .55rem 0 0; max-width: 52ch; }
+  .ok-note { font-size: .82rem; color: #15803d; margin: .55rem 0 0; }
+  @media (prefers-color-scheme: dark) { .ok-note { color: #4ade80; } }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .95em; }
 `;
 
-export function renderAccountsPage(accounts: Account[]): string {
+export interface AdminNotice {
+  ok: boolean;
+  message: string;
+}
+
+export function renderAccountsPage(
+  accounts: Account[],
+  recipient: string | null = null,
+  notice: AdminNotice | null = null,
+): string {
   const rows = accounts
     .map((account) => {
       const status = statusOf(account);
@@ -132,6 +164,28 @@ export function renderAccountsPage(accounts: Account[]): string {
       <span class="pill bad">auth error</span> repairs it — the morning brief keeps
       working meanwhile and names any account it had to skip.
     </p>
+
+    <section class="settings">
+      <h2>Morning brief</h2>
+      <form method="post" action="/settings">
+        <label for="recipient">Delivered by SMS to</label>
+        <div class="row">
+          <input id="recipient" name="brief_recipient_sms" type="tel"
+                 value="${escapeHtml(recipient ?? "")}"
+                 placeholder="+15715551234" autocomplete="tel">
+          <button type="submit">Save</button>
+        </div>
+        ${
+          notice
+            ? `<p class="${notice.ok ? "ok-note" : "err"}">${escapeHtml(notice.message)}</p>`
+            : ""
+        }
+        <p class="hint">
+          E.164 format. A bare 10-digit US number is accepted and normalised.
+          ${recipient ? "" : "Falling back to <code>CLIENT_SMS_NUMBER</code> until set."}
+        </p>
+      </form>
+    </section>
   </main>
 </body>
 </html>`;
