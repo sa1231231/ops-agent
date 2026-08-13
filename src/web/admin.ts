@@ -76,6 +76,8 @@ const STYLE = `
     text-decoration: none; font-weight: 600; font-size: .875rem;
   }
   .empty { padding: 2.5rem 0; opacity: .6; }
+  a.nav { font-size: .85rem; opacity: .7; text-decoration: none; margin-left: auto; }
+  a.nav:hover { opacity: 1; }
   .note { margin-top: 2.5rem; font-size: .8rem; opacity: .55; max-width: 62ch; }
   .settings {
     margin-top: 2.5rem; padding-top: 1.75rem;
@@ -143,7 +145,7 @@ export function renderAccountsPage(
 </head>
 <body>
   <main>
-    <header><h1>ops-agent</h1></header>
+    <header><h1>ops-agent</h1><a class="nav" href="/briefs">Brief history →</a></header>
     <div class="sub">${active} of ${accounts.length} account${accounts.length === 1 ? "" : "s"} healthy</div>
 
     ${

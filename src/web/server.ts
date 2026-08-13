@@ -4,7 +4,11 @@ import { HOST, PORT, PUBLIC_BASE_URL, requireEnv } from "../config.js";
 import { assertEncryptionReady } from "../auth/crypto.js";
 import { pool } from "../db/pool.js";
 import { listAccounts } from "../db/queries/accounts.js";
-import { getBriefByToken } from "../db/queries/briefs.js";
+import {
+  countBriefs,
+  getBriefByToken,
+  listBriefs,
+} from "../db/queries/briefs.js";
 import {
   deleteSetting,
   getSetting,
@@ -14,6 +18,7 @@ import {
 } from "../db/queries/settings.js";
 import { renderAccountsPage, type AdminNotice } from "./admin.js";
 import { renderBriefPage, type BriefPayload } from "./briefPage.js";
+import { BRIEFS_PER_PAGE, renderBriefsPage } from "./briefsPage.js";
 import { handleCallback, handleConnect } from "./oauth.js";
 
 /**
@@ -196,6 +201,22 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
 
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(renderAccountsPage(accounts, recipient, notice));
+    return;
+  }
+
+  if (path === "/briefs") {
+    // Clamped rather than trusted: a hand-edited page number should show an
+    // empty page, not throw or scan the whole table.
+    const requested = Number.parseInt(url.searchParams.get("page") ?? "1", 10);
+    const page = Number.isFinite(requested) && requested > 0 ? requested : 1;
+
+    const [total, briefs] = await Promise.all([
+      countBriefs(),
+      listBriefs(BRIEFS_PER_PAGE, (page - 1) * BRIEFS_PER_PAGE),
+    ]);
+
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(renderBriefsPage(briefs, page, total));
     return;
   }
 

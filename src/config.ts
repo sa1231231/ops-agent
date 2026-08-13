@@ -41,6 +41,15 @@ export const COLD_START_DAYS = 7;
 /** Sent-metadata lookback used to build the correspondent graph. */
 export const SENT_GRAPH_DAYS = 90;
 
+/**
+ * Briefs are kept this long, then deleted.
+ *
+ * Long enough to spot ranking drift across a few weeks, short enough that the
+ * table does not accumulate message content indefinitely. Matches the share
+ * link's own 30-day expiry, so a live link never points at a deleted brief.
+ */
+export const BRIEF_RETENTION_DAYS = 30;
+
 /** Per-account caps, so one enormous mailbox cannot stall a whole sync cycle. */
 export const MAX_INBOX_MESSAGES_PER_ACCOUNT = 500;
 export const MAX_SENT_MESSAGES_PER_ACCOUNT = 2000;

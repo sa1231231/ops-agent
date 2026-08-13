@@ -35,7 +35,7 @@ export async function claimBrief(localDate: string): Promise<BriefRow | null> {
     `insert into briefs (local_date, status, share_token, share_expires_at)
      values ($1, 'pending', $2, now() + interval '30 days')
      on conflict (local_date) do nothing
-     returning id, local_date, status, share_token, payload, sent_at`,
+     returning id, local_date::text as local_date, status, share_token, payload, sent_at`,
     [localDate, randomBytes(24).toString("base64url")],
   );
   return rows[0] ?? null;
@@ -56,7 +56,7 @@ export async function releaseBrief(briefId: number): Promise<void> {
 
 export async function getBrief(localDate: string): Promise<BriefRow | null> {
   const { rows } = await pool.query<BriefRow>(
-    `select id, local_date, status, share_token, payload, sent_at
+    `select id, local_date::text as local_date, status, share_token, payload, sent_at
        from briefs where local_date = $1`,
     [localDate],
   );
@@ -65,7 +65,7 @@ export async function getBrief(localDate: string): Promise<BriefRow | null> {
 
 export async function getBriefByToken(token: string): Promise<BriefRow | null> {
   const { rows } = await pool.query<BriefRow>(
-    `select id, local_date, status, share_token, payload, sent_at
+    `select id, local_date::text as local_date, status, share_token, payload, sent_at
        from briefs
       where share_token = $1
         and (share_expires_at is null or share_expires_at > now())`,
@@ -151,4 +151,54 @@ export async function markBriefFailed(briefId: number, payload: unknown): Promis
     `update briefs set status = 'failed', payload = $2::jsonb where id = $1`,
     [briefId, JSON.stringify(payload)],
   );
+}
+
+// --- history and retention --------------------------------------------------
+
+export interface BriefSummary {
+  id: number;
+  local_date: string;
+  status: "pending" | "sent" | "failed";
+  sent_at: Date | null;
+  message_sid: string | null;
+  share_token: string;
+  skipped_accounts: string[];
+  payload: unknown;
+}
+
+export async function countBriefs(): Promise<number> {
+  const { rows } = await pool.query<{ n: number }>(
+    "select count(*)::int n from briefs",
+  );
+  return rows[0]?.n ?? 0;
+}
+
+export async function listBriefs(
+  limit: number,
+  offset: number,
+): Promise<BriefSummary[]> {
+  const { rows } = await pool.query<BriefSummary>(
+    `select id, local_date::text as local_date, status, sent_at, message_sid,
+            share_token, skipped_accounts, payload
+       from briefs
+      order by local_date desc
+      limit $1 offset $2`,
+    [limit, offset],
+  );
+  return rows;
+}
+
+/**
+ * Deletes briefs past the retention window.
+ *
+ * Runs after a successful send rather than on its own schedule: it is cheap,
+ * and tying it to the daily job means there is no second thing to deploy or
+ * forget. brief_items cascade with the parent row.
+ */
+export async function pruneOldBriefs(retentionDays: number): Promise<number> {
+  const { rowCount } = await pool.query(
+    `delete from briefs where local_date < (current_date - ($1 || ' days')::interval)`,
+    [String(retentionDays)],
+  );
+  return rowCount ?? 0;
 }

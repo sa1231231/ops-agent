@@ -1,4 +1,4 @@
-import { optionalEnv, PUBLIC_BASE_URL } from "../config.js";
+import { BRIEF_RETENTION_DAYS, optionalEnv, PUBLIC_BASE_URL } from "../config.js";
 import { pool } from "../db/pool.js";
 import {
   carriedOverItems,
@@ -6,6 +6,7 @@ import {
   getBrief,
   markBriefFailed,
   markBriefSent,
+  pruneOldBriefs,
   releaseBrief,
   saveBriefItems,
 } from "../db/queries/briefs.js";
@@ -151,6 +152,11 @@ export async function runBrief(now = new Date()): Promise<void> {
     if (skipped.length > 0) {
       await notifyOperator(formatSkippedAccounts(skipped));
     }
+
+    // Retention runs after a successful send: cheap, and tied to the daily job
+    // so there is no second schedule to deploy or forget.
+    const pruned = await pruneOldBriefs(BRIEF_RETENTION_DAYS);
+    if (pruned > 0) console.log(`[brief] pruned ${pruned} brief(s) past retention`);
 
     console.log(`[brief] done — ${briefUrl}${messageSid ? ` (sid ${messageSid})` : ""}`);
   } catch (err) {
