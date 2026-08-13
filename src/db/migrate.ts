@@ -20,7 +20,27 @@ async function ensureMigrationsTable(): Promise<void> {
   `);
 }
 
+/**
+ * Arbitrary but fixed: any process running migrations takes this same lock.
+ * Migrations run on web-service boot, so a redeploy that overlaps instances
+ * would otherwise have two processes applying 002 at once — one crashes on the
+ * schema_migrations primary key and the container restart-loops.
+ */
+const MIGRATION_LOCK_ID = 8_274_119;
+
 export async function migrate(): Promise<void> {
+  const lock = await pool.connect();
+  try {
+    // Blocks rather than failing: the loser waits, then finds nothing to apply.
+    await lock.query("select pg_advisory_lock($1)", [MIGRATION_LOCK_ID]);
+    await runMigrations();
+  } finally {
+    await lock.query("select pg_advisory_unlock($1)", [MIGRATION_LOCK_ID]);
+    lock.release();
+  }
+}
+
+async function runMigrations(): Promise<void> {
   await ensureMigrationsTable();
 
   const files = (await readdir(MIGRATIONS_DIR))
