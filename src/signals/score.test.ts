@@ -1,0 +1,165 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import { rankThreads, scoreThread, looksAutomated, type ThreadCandidate } from "./score.js";
+import * as W from "./weights.js";
+
+/**
+ * These fixtures, not the live mailboxes, are the contract for ranking.
+ *
+ * Real data is useful for finding blind spots but is a bad regression test: it
+ * changes hourly, and the three connected accounts happen to contain almost no
+ * human correspondence. Tuning weights against that sample would overfit to it.
+ */
+
+const NOW = new Date("2026-08-13T10:00:00Z");
+const daysAgo = (n: number) => new Date(NOW.getTime() - n * 86_400_000);
+
+function candidate(overrides: Partial<ThreadCandidate> = {}): ThreadCandidate {
+  return {
+    accountId: 1,
+    accountEmail: "sam@servicecallsaver.com",
+    gmailThreadId: "t-default",
+    subject: "Subject",
+    snippet: "Body text",
+    lastInboundAt: daysAgo(1),
+    lastOutboundAt: null,
+    awaitingReply: true,
+    messageCount: 1,
+    fromEmail: "person@example.com",
+    fromName: "A Person",
+    toEmails: ["sam@servicecallsaver.com"],
+    ccEmails: [],
+    isAutomated: false,
+    hasListUnsubscribe: false,
+    outboundCount: 3,
+    lastOutboundToSenderAt: daysAgo(5),
+    meetingSoonAt: null,
+    metRecentlyAt: null,
+    ...overrides,
+  };
+}
+
+const score = (o: Partial<ThreadCandidate> = {}) => scoreThread(candidate(o), NOW).score;
+
+describe("the core requirement: importance is not recency", () => {
+  it("a six-day-old unanswered human email outranks this morning's newsletter", () => {
+    const aging = score({
+      gmailThreadId: "t-human",
+      lastInboundAt: daysAgo(6),
+      subject: "Re: contract redline — can you confirm?",
+    });
+
+    const fresh = score({
+      gmailThreadId: "t-news",
+      lastInboundAt: new Date(NOW.getTime() - 3_600_000),
+      fromEmail: "newsletter@em1.vendor.com",
+      outboundCount: 0,
+      hasListUnsubscribe: true,
+      subject: "Last chance: 20% off",
+    });
+
+    assert.ok(aging > fresh, `expected ${aging} > ${fresh}`);
+  });
+
+  it("peaks between two and seven days rather than decaying from now", () => {
+    assert.ok(W.agingScore(4) > W.agingScore(0.2), "4d should beat 5 hours");
+    assert.ok(W.agingScore(4) > W.agingScore(25), "4d should beat 25d");
+    assert.equal(W.agingScore(3), W.agingScore(7), "plateau across the peak");
+  });
+});
+
+describe("automated mail cannot reach the brief", () => {
+  it("stays below the floor even when maximally boosted otherwise", () => {
+    const best = score({
+      fromEmail: "no-reply@vendor.com",
+      lastInboundAt: daysAgo(5),
+      toEmails: ["sam@servicecallsaver.com"],
+      subject: "[ACTION REQUIRED] can you confirm by EOD?",
+      messageCount: 5,
+      outboundCount: 0,
+    });
+    assert.ok(best < W.MIN_SCORE_FOR_BRIEF, `automated scored ${best}`);
+  });
+
+  it("recognises machine senders the anchored regex used to miss", () => {
+    for (const address of [
+      "voice-noreply@google.com",
+      "hello@notify.railway.app",
+      "bounces+7@list.example.com",
+      "em@em1.cloudflare.com",
+      "support@hetzner.com",
+      "notifications@servicecallsaver.com",
+    ]) {
+      assert.ok(looksAutomated(address), `should flag ${address}`);
+    }
+  });
+
+  it("does not flag ordinary human addresses", () => {
+    for (const address of [
+      "eric@kalman.com",
+      "dzvoicestudio@gmail.com",
+      "sarah.chen@acme.co.uk",
+    ]) {
+      assert.equal(looksAutomated(address), null, `should not flag ${address}`);
+    }
+  });
+});
+
+describe("the correspondent graph carries the ranking", () => {
+  it("someone he writes to outranks an identical stranger", () => {
+    const known = score({ outboundCount: 12 });
+    const stranger = score({ outboundCount: 0, lastOutboundToSenderAt: null });
+    assert.ok(known > stranger, `${known} should beat ${stranger}`);
+  });
+
+  it("still lets a first-time human with a direct ask clear the floor", () => {
+    const newClient = score({
+      outboundCount: 0,
+      lastOutboundToSenderAt: null,
+      lastInboundAt: daysAgo(3),
+      subject: "Quote request — can you confirm availability?",
+    });
+    assert.ok(
+      newClient >= W.MIN_SCORE_FOR_BRIEF,
+      `a real new client scored ${newClient}, below the floor`,
+    );
+  });
+});
+
+describe("answered threads are finished business", () => {
+  it("scores below one still awaiting a reply", () => {
+    const waiting = score({ awaitingReply: true });
+    const answered = score({ awaitingReply: false, lastOutboundAt: daysAgo(0.5) });
+    assert.ok(waiting > answered, `${waiting} should beat ${answered}`);
+  });
+});
+
+describe("stability — the brief must not reshuffle overnight", () => {
+  it("is deterministic for identical input", () => {
+    const c = candidate();
+    assert.equal(scoreThread(c, NOW).score, scoreThread(c, NOW).score);
+  });
+
+  it("breaks ties on fixed keys, not array order", () => {
+    const a = scoreThread(candidate({ gmailThreadId: "aaa" }), NOW);
+    const b = scoreThread(candidate({ gmailThreadId: "zzz" }), NOW);
+    assert.equal(a.score, b.score, "fixture precondition: scores must tie");
+
+    const forward = rankThreads([a, b]).map((t) => t.candidate.gmailThreadId);
+    const reversed = rankThreads([b, a]).map((t) => t.candidate.gmailThreadId);
+    assert.deepEqual(forward, reversed, "input order must not affect ranking");
+    assert.deepEqual(forward, ["aaa", "zzz"]);
+  });
+});
+
+describe("the calendar join", () => {
+  it("boosts a sender he is about to meet", () => {
+    const withMeeting = score({ meetingSoonAt: new Date(NOW.getTime() + 3_600_000) });
+    assert.ok(withMeeting > score(), "an imminent meeting should raise the score");
+  });
+
+  it("boosts a follow-up owed after a recent meeting", () => {
+    const owed = score({ metRecentlyAt: daysAgo(1) });
+    assert.ok(owed > score(), "an unanswered post-meeting thread should rise");
+  });
+});
