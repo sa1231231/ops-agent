@@ -68,6 +68,13 @@ function addressedWeight(candidate: ThreadCandidate): Signal | null {
   return null;
 }
 
+/** A platform relaying an in-app message, where the real thread lives elsewhere. */
+export function notificationRelay(fromEmail: string | null): string | null {
+  if (!fromEmail) return null;
+  const domain = fromEmail.slice(fromEmail.lastIndexOf("@") + 1);
+  return W.NOTIFICATION_RELAY_DOMAINS.some((re) => re.test(domain)) ? domain : null;
+}
+
 /**
  * Whether the sender looks like a machine.
  *
@@ -132,8 +139,14 @@ export function scoreThread(
   const addressed = addressedWeight(candidate);
   if (addressed) signals.push(addressed);
 
-  const relationship = W.correspondentScore(candidate.outboundCount);
-  if (relationship > 0) {
+  // Resolved once: a relay address changes every conversation, so the graph
+  // cannot say anything about it and is skipped in both directions.
+  const relay = notificationRelay(candidate.fromEmail);
+
+  const relationship = relay ? 0 : W.correspondentScore(candidate.outboundCount);
+  if (relay) {
+    // no relationship signal either way
+  } else if (relationship > 0) {
     signals.push({
       name: "known-correspondent",
       points: relationship,
@@ -153,6 +166,7 @@ export function scoreThread(
   // a relationship, and awarding it anyway was enough to lift a maximally
   // boosted notification over the floor.
   if (
+    !relay &&
     candidate.outboundCount > 0 &&
     candidate.lastOutboundToSenderAt &&
     daysBetween(candidate.lastOutboundToSenderAt, now) <= W.CORRESPONDENT_RECENT_DAYS
@@ -189,13 +203,23 @@ export function scoreThread(
 
   // Demotions last, so a reader of the breakdown sees what was earned and then
   // what was taken away.
-  const automatedSender = looksAutomated(candidate.fromEmail);
-  if (candidate.isAutomated || automatedSender) {
+  // Exclusive with `automated`: most relays also match a machine-sender pattern,
+  // and stacking both would read as an arbitrary -100 in the scoring view.
+  if (relay) {
     signals.push({
-      name: "automated",
-      points: W.AUTOMATED,
-      detail: automatedSender ?? "headers indicate machine-sent",
+      name: "notification-relay",
+      points: W.NOTIFICATION_RELAY,
+      detail: `${relay} — the conversation lives in that app`,
     });
+  } else {
+    const automatedSender = looksAutomated(candidate.fromEmail);
+    if (candidate.isAutomated || automatedSender) {
+      signals.push({
+        name: "automated",
+        points: W.AUTOMATED,
+        detail: automatedSender ?? "headers indicate machine-sent",
+      });
+    }
   }
   if (candidate.hasListUnsubscribe) {
     signals.push({ name: "bulk-mail", points: W.LIST_UNSUBSCRIBE });

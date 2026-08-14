@@ -207,8 +207,10 @@ export async function runBrief(
     const message = err instanceof Error ? err.message : String(err);
     if (brief) await markBriefFailed(brief.id, { error: message });
     await notifyOperator({
-      subject: `Brief failed for ${localDate}`,
-      body: `The morning brief could not be sent.\n\n${message}`,
+      subject: `the brief for ${localDate} was not sent`,
+      body:
+        "Composing or delivering today's brief failed, so nothing was sent.\n\n" +
+        `  ${message}`,
     });
     throw err;
   }

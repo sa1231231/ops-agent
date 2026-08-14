@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { rankThreads, scoreThread, looksAutomated, type ThreadCandidate } from "./score.js";
+import {
+  looksAutomated,
+  notificationRelay,
+  rankThreads,
+  scoreThread,
+  type ThreadCandidate,
+} from "./score.js";
 import * as W from "./weights.js";
 
 /**
@@ -161,5 +167,49 @@ describe("the calendar join", () => {
   it("boosts a follow-up owed after a recent meeting", () => {
     const owed = score({ metRecentlyAt: daysAgo(1) });
     assert.ok(owed > score(), "an unanswered post-meeting thread should rise");
+  });
+});
+
+describe("platform notification relays are not email", () => {
+  it("keeps a Google Voice text below the floor despite a reply history", () => {
+    // The exact shape that broke ranking: digits for a localpart, so no
+    // machine-sender pattern matches, and one inbox reply granting
+    // known-correspondent while exempting NEVER_CORRESPONDED.
+    const score = scoreThread(
+      candidate({
+        fromEmail: "15715778596.18888987905.341xqhvnh5@txt.voice.google.com",
+        outboundCount: 1,
+        lastInboundAt: daysAgo(6),
+      }),
+      NOW,
+    ).score;
+    assert.ok(score < W.MIN_SCORE_FOR_BRIEF, `relay scored ${score}`);
+  });
+
+  it("covers the platforms that would otherwise flood the brief", () => {
+    for (const address of [
+      "15715778596.1@txt.voice.google.com",
+      "notifications@slack.com",
+      "noreply@discord.com",
+      "messages-noreply@linkedin.com",
+      "notification@facebookmail.com",
+      "no-reply@zoom.us",
+    ]) {
+      assert.ok(notificationRelay(address), `should flag ${address}`);
+    }
+  });
+
+  it("does not flag ordinary senders", () => {
+    for (const address of ["eric@kalman.com", "sam@servicecallsaver.com"]) {
+      assert.equal(notificationRelay(address), null, `should not flag ${address}`);
+    }
+  });
+
+  it("does not stack with the automated penalty", () => {
+    // notifications@slack.com matches both rules; only one should apply.
+    const scored = scoreThread(candidate({ fromEmail: "notifications@slack.com" }), NOW);
+    const demotions = scored.signals.filter((s) => s.points <= W.AUTOMATED);
+    assert.equal(demotions.length, 1, "exactly one large demotion");
+    assert.equal(demotions[0]?.name, "notification-relay");
   });
 });

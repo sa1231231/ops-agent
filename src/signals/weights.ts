@@ -158,6 +158,53 @@ export const AUTOMATED_LOCALPARTS: readonly RegExp[] = [
 ];
 
 /**
+ * Platform notification relays: "you have a message" emails from apps where the
+ * actual conversation lives somewhere else.
+ *
+ * These are not email. Google Voice, Slack, Discord, LinkedIn and the rest all
+ * forward a copy of an in-app message, and the real thread is in that app — he
+ * has already been notified there, usually on the same phone the brief arrives
+ * on. Surfacing them is both redundant and, left unchecked, floods the brief:
+ * one chatty Slack workspace can generate more "unanswered" threads in a day
+ * than a month of real correspondence.
+ *
+ * Google Voice is the case that exposed this, and it is instructive. Its
+ * addresses look like `15715778596.18888987905.341xqhvnh5@txt.voice.google.com`
+ * — the localpart is digits, so no machine-sender pattern matches. Worse,
+ * replying to a text from the inbox creates outbound history, which grants
+ * `known-correspondent` and, critically, exempts the address from
+ * NEVER_CORRESPONDED. And because the thread id is random, every conversation
+ * gets a fresh address, so the count is stuck at one forever: never high enough
+ * to mean anything, always high enough to dodge the penalty.
+ *
+ * Demoted rather than dropped at fetch, so the signal survives if one of these
+ * ever turns out to be worth surfacing.
+ *
+ * Two consequences follow, both applied in score.ts. The correspondent graph is
+ * skipped entirely for a relay — neither the bonus nor NEVER_CORRESPONDED, since
+ * an address that changes every conversation measures nothing in either
+ * direction. And the penalty is sized to dominate rather than merely offset: a
+ * relay carrying every remaining positive signal must still land below the
+ * floor, or a single detected question would surface it.
+ */
+export const NOTIFICATION_RELAY = -60;
+
+export const NOTIFICATION_RELAY_DOMAINS: readonly RegExp[] = [
+  /(^|\.)txt\.voice\.google\.com$/i,
+  /(^|\.)slack\.com$/i,
+  /(^|\.)discord(app)?\.com$/i,
+  /(^|\.)linkedin\.com$/i,
+  /(^|\.)facebookmail\.com$/i,
+  /(^|\.)instagram\.com$/i,
+  /(^|\.)(x|twitter)\.com$/i,
+  /(^|\.)redditmail\.com$/i,
+  /(^|\.)teams\.microsoft\.com$/i,
+  /(^|\.)zoom\.us$/i,
+  /(^|\.)intercom(mail)?\.io$/i,
+  /(^|\.)whatsapp\.com$/i,
+];
+
+/**
  * Sending domains belonging to bulk-mail infrastructure. `em1.cloudflare.com`
  * and friends are ESP subdomains — a human's reply address never looks like it.
  */

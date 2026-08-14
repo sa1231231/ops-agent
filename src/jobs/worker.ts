@@ -41,10 +41,12 @@ async function main(): Promise<void> {
     syncFailed = errorText(err);
     console.error("[worker] sync failed entirely:", syncFailed);
     await notifyOperator({
-      subject: "Sync failed entirely",
+      subject: "the hourly sync did not finish",
       body:
-        `The hourly sync threw before finishing.\n\n${syncFailed}\n\n` +
-        "The brief will still run, on whatever data was already stored.",
+        "The sync threw before completing, so no account was refreshed this hour.\n\n" +
+        `  ${syncFailed}\n\n` +
+        "The brief still runs, using whatever was already stored. If this repeats, " +
+        "the data behind the next brief will be stale rather than missing.",
     });
   }
 
@@ -69,8 +71,11 @@ main()
   .catch(async (err: unknown) => {
     console.error("[worker] fatal:", errorText(err));
     await notifyOperator({
-      subject: "Worker run failed",
-      body: `The scheduled worker did not complete.\n\n${errorText(err)}`,
+      subject: "the scheduled run did not complete",
+      body:
+        "The hourly worker stopped before finishing. Neither sync nor the brief " +
+        "can be assumed to have run.\n\n" +
+        `  ${errorText(err)}`,
     });
     await pool.end();
     process.exit(1);
