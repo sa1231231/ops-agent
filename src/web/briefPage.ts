@@ -14,7 +14,20 @@ export interface BriefPayload {
   composed: ComposedBrief;
   text: string;
   briefUrl: string;
+  /** Rendered schedule. Absent on briefs stored before the model stopped writing it. */
+  meetings?: string[];
+  conflicts?: string[];
 }
+
+/**
+ * Briefs already in the database carry a model-written schedule summary. The
+ * history exists to be compared across weeks, so old rows keep rendering rather
+ * than showing a blank Today section after the format change.
+ */
+export type LegacyComposed = ComposedBrief & {
+  meetings_line?: string;
+  conflicts_line?: string;
+};
 
 const STYLE = `
   :root { color-scheme: light dark; }
@@ -35,6 +48,13 @@ const STYLE = `
   li { margin-bottom: .85rem; }
   li .why { display: block; opacity: .6; font-size: .85rem; margin-top: .1rem; }
   .lead { font-size: 1.02rem; margin: 0 0 .4rem; }
+  ul.sched { list-style: none; margin: 0; padding: 0; }
+  ul.sched li {
+    margin: 0; padding: .45rem 0;
+    border-bottom: 1px solid color-mix(in srgb, CanvasText 9%, transparent);
+    font-variant-numeric: tabular-nums; white-space: pre-wrap;
+  }
+  ul.sched li:last-child { border-bottom: 0; }
   .warn {
     border-left: 3px solid #d97706; padding: .5rem .85rem; margin: .75rem 0;
     background: color-mix(in srgb, #d97706 9%, transparent); border-radius: 0 5px 5px 0;
@@ -53,7 +73,23 @@ export function renderBriefPage(
   payload: BriefPayload,
   skippedAccounts: string[],
 ): string {
-  const b = payload.composed;
+  const b = (payload.composed ?? { emails: [], priorities: [] }) as LegacyComposed;
+
+  const schedule = payload.meetings?.length
+    ? `<ul class="sched">${payload.meetings
+        .map((m) => `<li>${escapeHtml(m)}</li>`)
+        .join("")}</ul>`
+    : b.meetings_line
+      ? `<p class="lead">${escapeHtml(b.meetings_line)}</p>`
+      : `<p class="empty">Nothing on the calendar today.</p>`;
+
+  const conflicts = payload.conflicts?.length
+    ? payload.conflicts
+        .map((c) => `<div class="warn">${escapeHtml(c)}</div>`)
+        .join("")
+    : b.conflicts_line
+      ? `<div class="warn">${escapeHtml(b.conflicts_line)}</div>`
+      : "";
 
   const emails = b.emails.length
     ? `<ol>${b.emails
@@ -85,19 +121,19 @@ export function renderBriefPage(
     <div class="date">${escapeHtml(localDate)}</div>
 
     <section>
-      <h2>Today</h2>
-      <p class="lead">${escapeHtml(b.meetings_line || "No meetings today")}</p>
-      ${b.conflicts_line ? `<div class="warn">${escapeHtml(b.conflicts_line)}</div>` : ""}
-    </section>
-
-    <section>
-      <h2>Needs you</h2>
-      ${emails}
+      <h2>Meetings</h2>
+      ${schedule}
+      ${conflicts}
     </section>
 
     <section>
       <h2>Priorities</h2>
       ${priorities}
+    </section>
+
+    <section>
+      <h2>Needs a reply</h2>
+      ${emails}
     </section>
 
     ${

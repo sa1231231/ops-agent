@@ -10,7 +10,12 @@ import {
 } from "../db/queries/briefs.js";
 import { briefHour, briefRecipient } from "../db/queries/settings.js";
 import { formatSkippedAccounts, notifyOperator } from "../outputs/operatorEmail.js";
-import { renderPlainText, estimateSegments } from "../outputs/render.js";
+import {
+  conflictLines,
+  estimateSegments,
+  meetingLines,
+  renderPlainText,
+} from "../outputs/render.js";
 import { deliveryChannel, sendSms } from "../outputs/sms.js";
 import { buildTemplateVariables, sendBrief as sendWhatsApp } from "../outputs/whatsapp.js";
 import { composeBrief } from "../ranking/compose.js";
@@ -111,10 +116,17 @@ export async function runBrief(
     const briefUrl = brief
       ? `${PUBLIC_BASE_URL}/brief/${brief.share_token}`
       : `${PUBLIC_BASE_URL}/brief/(preview)`;
+    // Rendered from calendar rows, not from the model: the schedule has one
+    // correct answer and it is already in the database.
+    const meetingList = meetingLines(meetings);
+    const conflictList = conflictLines(conflicts);
+
     const text = renderPlainText(composed, {
       localDate,
       briefUrl,
       skippedAccounts: skippedEmails,
+      meetings: meetingList,
+      conflicts: conflictList,
     });
 
     const channel = deliveryChannel();
@@ -143,7 +155,13 @@ export async function runBrief(
       );
     } else if (channel === "whatsapp") {
       messageSid = await sendWhatsApp(
-        buildTemplateVariables(composed, { localDate, briefUrl, skippedAccounts: skippedEmails }),
+        buildTemplateVariables(composed, {
+          localDate,
+          briefUrl,
+          skippedAccounts: skippedEmails,
+          meetings: meetingList,
+          conflicts: conflictList,
+        }),
       );
     } else {
       console.log("[brief] DELIVERY_CHANNEL=none — rendered and stored, not sent");
@@ -179,7 +197,7 @@ export async function runBrief(
 
     await markBriefSent(
       brief!.id,
-      { composed, text, briefUrl, scoring },
+      { composed, meetings: meetingList, conflicts: conflictList, text, briefUrl, scoring },
       messageSid,
       skippedEmails,
     );

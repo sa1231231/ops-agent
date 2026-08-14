@@ -16,9 +16,12 @@ import type { Conflict, Meeting } from "./meetings.js";
 
 const MODEL = "claude-opus-5";
 
+/**
+ * The schedule is deliberately absent. Meeting times, titles, and conflicts are
+ * facts already in Postgres and are rendered directly from calendar rows — the
+ * model only handles the two things that need judgement.
+ */
 export interface ComposedBrief {
-  meetings_line: string;
-  conflicts_line: string;
   emails: Array<{ thread_key: string; line: string; reason: string }>;
   priorities: string[];
 }
@@ -26,16 +29,6 @@ export interface ComposedBrief {
 const OUTPUT_SCHEMA = {
   type: "object",
   properties: {
-    meetings_line: {
-      type: "string",
-      description:
-        "One line summarising today's schedule. Include the count and the first meeting's time and who it is with. Empty string if there are no meetings.",
-    },
-    conflicts_line: {
-      type: "string",
-      description:
-        "One line naming any double-bookings or zero-gap back-to-backs. Empty string if the day is clean.",
-    },
     emails: {
       type: "array",
       description: "Emails that need him, most important first. At most 8.",
@@ -66,7 +59,7 @@ const OUTPUT_SCHEMA = {
       items: { type: "string" },
     },
   },
-  required: ["meetings_line", "conflicts_line", "emails", "priorities"],
+  required: ["emails", "priorities"],
   additionalProperties: false,
 } as const;
 
@@ -74,10 +67,12 @@ const SYSTEM = `You write a single morning brief for one busy operator who runs 
 
 He reads this as a text message, once, before his day starts. It should tell him what actually needs him today and nothing else.
 
+You are given his schedule for context, but you do NOT write it. Times, titles, and conflicts are rendered separately from his calendar. Use the schedule to inform the priorities, and never restate it.
+
 How to write it:
 
 - Every field is a SINGLE LINE. Never use newlines, bullet characters, or markdown.
-- Keep every line short. Meetings and conflicts under 150 characters; each email line and each priority under 110. This is read on a phone, and anything longer is cut off. Write to the limit rather than being truncated at it.
+- Keep every line short: each email line and each priority under 110 characters. This is read on a phone, and anything longer is cut off. Write to the limit rather than being truncated at it.
 - Be specific and concrete. "Eric needs the contract redline" beats "follow up on outstanding items".
 - Name people, not addresses. "Eric Kalman" not "eric@kalman.com".
 - Do not pad. If only two emails genuinely need him, return two. An honest short brief is worth more than a padded long one.
@@ -170,10 +165,10 @@ export function buildPrompt(input: ComposeInput): string {
 
   return `Today is ${localDate} (${BRIEF_TZ}).
 
-## Today's meetings
+## Today's meetings (context only — this is rendered for him separately, do not restate it)
 ${meetingBlock}
 
-## Scheduling conflicts detected
+## Scheduling conflicts detected (also rendered separately)
 ${conflictBlock}
 
 ## Emails that may need him
@@ -242,8 +237,6 @@ export async function composeBrief(input: ComposeInput): Promise<ComposedBrief> 
   );
 
   return {
-    meetings_line: sanitizeLine(parsed.meetings_line ?? "", 180),
-    conflicts_line: sanitizeLine(parsed.conflicts_line ?? "", 180),
     emails: (parsed.emails ?? [])
       // A hallucinated thread_key would render a line pointing at nothing.
       .filter((e) => knownKeys.has(e.thread_key))

@@ -170,15 +170,19 @@ Take the top ~40–60 across all accounts. **Ties break deterministically** on `
 
 ### The model call
 
-One call to `claude-opus-5`. Adaptive thinking (on by default on Opus 5), `effort: "high"`, structured output via `output_config.format` with a JSON schema returning `{ meetings, conflicts[], emails[{rank, account, from, subject, reason, days_open}], priorities[3] }`. A deterministic renderer maps that JSON into the template slots and the HTML brief page — **the model never formats the message**.
+One call to `claude-opus-5`. Adaptive thinking (on by default on Opus 5), `effort: "high"`, structured output via `output_config.format` with a JSON schema returning `{ emails[{thread_key, line, reason}], priorities[3] }`. A deterministic renderer maps that JSON into the message and the HTML brief page — **the model never formats the message**.
 
 > `temperature` is **removed** on Opus 5 (sending it returns a 400). Stability comes from the deterministic prefilter, deterministic tie-breaks, the fixed output schema, and carry-over — not from a sampling knob.
 
-### Seeing why — `/scoring`
+**The model does not write the schedule.** Meeting times, titles, and conflicts are rendered from calendar rows by `meetingLines()` / `conflictLines()` in `outputs/render.ts`. The schedule is a fact already in Postgres with one correct answer; asking a model to restate it spends tokens and adds a way to be wrong about the only part of the brief that cannot be a judgement call. The schedule is still passed into the prompt as context, because the priorities depend on it, with an explicit instruction not to restate it.
 
-The admin console has a live scoring view: every candidate, its score, which signals fired with their point values, and whether it cleared the floor. It recomputes from current data, so a weight change is visible on reload.
+### Seeing why — `/briefs`
 
-Each sent brief also stores a `scoring` snapshot in its payload, because the live page cannot answer "why did Tuesday's brief pick that" — the mail and the correspondent graph have moved on since.
+One page carries both the live scoring view and the brief history, because the question scoring answers is always asked about a specific brief. `/scoring` redirects there.
+
+Default view is one plain-English line per candidate — the two or three signals that decided it, plus what held it back. Point values are one `<details>` click away. The full ranked list, the below-the-floor set, and the current weights table are all collapsed by default: the numbers are what you change, but reading fourteen chips per row is the wrong way to answer "is this ranking sensible".
+
+It recomputes from current data, so a weight change is visible on reload. Each sent brief also stores a `scoring` snapshot in its payload, because the live page cannot answer "why did Tuesday's brief pick that" — the mail and the correspondent graph have moved on since.
 
 ### Carry-over is what earns trust
 
@@ -232,11 +236,45 @@ SMS is the live channel; WhatsApp is kept behind `DELIVERY_CHANNEL` but unused.
 
 **The message contains no emoji, and `toGsm7()` strips everything outside printable ASCII.** This is a cost decision, not an aesthetic one: a single character outside GSM-7 switches the whole message to UCS-2, dropping the segment size from 153 characters to 67 and roughly doubling the bill. Emoji are the obvious culprit but an em dash or curly apostrophe does it just as thoroughly, and the model emits those constantly. Measured: the same brief is 11 segments with one emoji, 5 without.
 
+### Message layout
+
+```
+Friday, Aug 14
+
+MEETINGS (5)
+7:00 AM  PAY IN FULL - Freedom Chase
+8:30 AM  cisa standup
+...
+
+No gap - 8:30 AM cisa standup runs into 9:00 AM cdp standup
+
+PRIORITIES
+1. ...
+
+NEEDS A REPLY
+1. <who and what they want>
+   <why it matters>
+
+<brief url>
+```
+
+Schedule first because it is fixed and time-bound; priorities next because they are what he decides to do about the day; replies last because they are the backlog he works around them.
+
+One meeting per line, and each reply's reason on its own indented line. Both cost segments and both are deliberate — the reason used to trail the subject in parentheses and disappeared into the wrap, and it is the part he reads to decide whether to act now. Conflicts sit inside the meetings block rather than in their own section: a conflict is a property of the day, and splitting it off meant reading the same two meetings twice. Measured cost of the readable layout: 8 segments versus 7.
+
 ### Repeat sends
 
 There is deliberately **no one-per-day lock**. `briefs.local_date` was UNIQUE and doubled as an idempotency gate, which meant a manual test send consumed the day's slot and blocked the scheduled one — unworkable while ranking and format are being tuned.
 
-What prevents accidental repeats now: the brief only fires when the local hour matches the configured hour, and the worker runs once per hour, so the scheduler reaches the send path at most once a day. The remaining exposure is a manual **Send brief now** colliding with a scheduled run in the same hour, which sends twice. That is accepted for now.
+What prevents accidental repeats now: the brief only fires when the local hour matches the configured hour, and the worker runs once per hour, so the scheduler reaches the send path at most once a day. The remaining exposure is a manual run colliding with a scheduled one in the same hour, which sends twice. That is accepted for now.
+
+### The console's Run now
+
+**One button — "Sync and send brief".** It syncs every account, then composes and sends, exactly as the scheduled worker does. There is no separate sync button and no preview mode: the whole system is read-only, so nothing about firing a brief needs care, and the only thing a preview saved was an SMS segment. Splitting them mostly created a way to send a brief against stale mail.
+
+Sync failure inside the run is caught, not fatal — same rule as the worker. Postgres already holds days of thread state, so a Google outage degrades the brief rather than cancelling it.
+
+Job state is a single in-memory record (`web/jobs.ts`), correct for a single instance. A restart loses the last result, not the work. `DRY_RUN=1` on the CLI still exists for checking format without sending.
 
 ### Timezone / DST
 

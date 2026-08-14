@@ -104,9 +104,7 @@ const STYLE = `
   .ok-note { font-size: .82rem; color: #15803d; margin: .55rem 0 0; }
   @media (prefers-color-scheme: dark) { .ok-note { color: #4ade80; } }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .95em; }
-  .actions { display: flex; gap: .5rem; flex-wrap: wrap; }
-  .actions form { margin: 0; display: flex; flex-direction: column; gap: .3rem; }
-  .caption { font-size: .72rem; opacity: .45; }
+  .caption { font-size: .78rem; opacity: .5; margin-top: .55rem; }
   td.act { text-align: right; white-space: nowrap; }
   td.act form { margin: 0; }
   .linkbtn {
@@ -121,20 +119,6 @@ const STYLE = `
     border-radius: 6px; background: Canvas; color: CanvasText;
   }
   button:disabled { opacity: .4; cursor: not-allowed; }
-  button.danger { background: #b91c1c; color: #fff; }
-  .job {
-    margin-top: 1rem; padding: .75rem .9rem; border-radius: 8px;
-    border: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
-  }
-  .job-head { display: flex; align-items: center; gap: .6rem; }
-  .job-when { margin-left: auto; font-size: .78rem; opacity: .5; }
-  .job-sum { font-size: .85rem; opacity: .75; margin-top: .45rem; }
-  pre.preview {
-    margin: .6rem 0 0; padding: .7rem .85rem; border-radius: 6px; overflow-x: auto;
-    background: color-mix(in srgb, CanvasText 6%, transparent);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: .78rem; line-height: 1.5; white-space: pre-wrap; word-break: break-word;
-  }
 `;
 
 export interface AdminNotice {
@@ -142,48 +126,31 @@ export interface AdminNotice {
   message: string;
 }
 
-export interface JobPanel {
-  sync: JobState;
-  brief: JobState;
-}
-
-function relativeAgo(date: Date | null): string {
-  return date ? relativeTime(date) : "never";
-}
-
 /** Absolute timestamp plus relative age: one answers "when", the other "how stale". */
 function lastSyncedLabel(at: Date | null): string {
-  if (!at) return "Never synced";
-  return `Last synced ${formatLocalDateTime(at)} (${relativeTime(at)})`;
+  if (!at) return "Never synced.";
+  return `Last synced ${formatLocalDateTime(at)} (${relativeTime(at)}).`;
 }
 
-function renderJob(name: string, label: string, job: JobState): string {
-  const status = job.running
-    ? `<span class="pill warn">running…</span>`
-    : job.error
-      ? `<span class="pill bad">failed</span>`
-      : job.summary
-        ? `<span class="pill ok">ok</span>`
-        : `<span class="pill off">idle</span>`;
-
-  return `
-    <div class="job">
-      <div class="job-head">
-        <strong>${escapeHtml(label)}</strong>
-        ${status}
-        <span class="job-when">${escapeHtml(relativeAgo(job.finishedAt ?? job.startedAt))}</span>
-      </div>
-      ${job.error ? `<div class="err">${escapeHtml(job.error)}</div>` : ""}
-      ${job.summary ? `<div class="job-sum">${escapeHtml(job.summary)}</div>` : ""}
-      ${job.detail ? `<pre class="preview">${escapeHtml(job.detail)}</pre>` : ""}
-    </div>`;
+/** One line under the button: what it is doing, or what it last did. */
+function runStatus(job: JobState, lastSynced: Date | null): string {
+  if (job.running) {
+    return `<div class="caption">Syncing every account, then composing and sending. This takes a minute or two.</div>`;
+  }
+  if (job.error) {
+    return `<div class="err">${escapeHtml(job.error)}</div>`;
+  }
+  if (job.summary && job.finishedAt) {
+    return `<div class="ok-note">${escapeHtml(job.summary)} (${relativeTime(job.finishedAt)})</div>`;
+  }
+  return `<div class="caption">${escapeHtml(lastSyncedLabel(lastSynced))}</div>`;
 }
 
 export function renderAccountsPage(
   accounts: Account[],
   recipient: string | null = null,
   notice: AdminNotice | null = null,
-  jobs: JobPanel | null = null,
+  job: JobState | null = null,
   lastSynced: Date | null = null,
   briefHourValue = 6,
 ): string {
@@ -216,30 +183,22 @@ export function renderAccountsPage(
     .join("");
 
   const active = accounts.filter((a) => a.status === "active").length;
-  const busy = Boolean(jobs && (jobs.sync.running || jobs.brief.running));
+  const busy = Boolean(job?.running);
 
-  const jobSection = jobs
+  const jobSection = job
     ? `
     <section class="settings">
       <h2>Run now</h2>
-      <div class="actions">
-        <form method="post" action="/run/sync">
-          <button type="submit" ${jobs.sync.running ? "disabled" : ""}>Sync accounts</button>
-          <div class="caption">${escapeHtml(lastSyncedLabel(lastSynced))}</div>
-        </form>
-        <form method="post" action="/run/brief">
-          <input type="hidden" name="mode" value="preview">
-          <button type="submit" ${busy ? "disabled" : ""}>Preview brief</button>
-          <div class="caption">Composes and discards</div>
-        </form>
-        <form method="post" action="/run/brief">
-          <input type="hidden" name="mode" value="send">
-          <button type="submit" class="danger" ${busy ? "disabled" : ""}>Send brief now</button>
-          <div class="caption">Real SMS, once per day</div>
-        </form>
-      </div>
-      ${renderJob("sync", "Sync", jobs.sync)}
-      ${renderJob("brief", "Brief", jobs.brief)}
+      <form method="post" action="/run">
+        <button type="submit" ${busy ? "disabled" : ""}>
+          ${busy ? "Running…" : "Sync and send brief"}
+        </button>
+      </form>
+      ${runStatus(job, lastSynced)}
+      <p class="hint">
+        Pulls every connected account, then composes today's brief and texts it.
+        The same thing the scheduled run does at ${String(briefHourValue).padStart(2, "0")}:00.
+      </p>
     </section>`
     : "";
 
@@ -254,7 +213,7 @@ export function renderAccountsPage(
 </head>
 <body>
   <main>
-    <header><h1>ops-agent</h1><a class="nav" href="/scoring">Scoring →</a><a class="nav" href="/briefs" style="margin-left:1rem">Brief history →</a></header>
+    <header><h1>ops-agent</h1><a class="nav" href="/briefs">Briefs and scoring →</a></header>
     <div class="sub">${active} of ${accounts.length} account${accounts.length === 1 ? "" : "s"} healthy</div>
 
     ${

@@ -36,7 +36,14 @@ const EMPTY_SLOT = "—";
 
 export function buildTemplateVariables(
   brief: ComposedBrief,
-  opts: { localDate: string; briefUrl: string; skippedAccounts: string[] },
+  opts: {
+    localDate: string;
+    briefUrl: string;
+    skippedAccounts: string[];
+    /** Rendered from calendar rows; template slots are single-line, so joined. */
+    meetings: string[];
+    conflicts: string[];
+  },
 ): Record<string, string> {
   const slot = (value: string | undefined) => (value && value.trim() ? value : EMPTY_SLOT);
 
@@ -47,8 +54,12 @@ export function buildTemplateVariables(
 
   return {
     "1": slot(opts.localDate),
-    "2": slot(brief.meetings_line || "No meetings today"),
-    "3": slot(brief.conflicts_line || "No conflicts"),
+    "2": slot(
+      opts.meetings.length
+        ? `${opts.meetings.length} meeting${opts.meetings.length === 1 ? "" : "s"}: ${opts.meetings.join("; ")}`
+        : "No meetings today",
+    ),
+    "3": slot(opts.conflicts.join("; ") || "No conflicts"),
     "4": slot(emails[0] ? `${emails[0].line} (${emails[0].reason})` : "Nothing needs you"),
     "5": slot(emails[1] ? `${emails[1].line} (${emails[1].reason})` : undefined),
     "6": slot(emails[2] ? `${emails[2].line} (${emails[2].reason})` : undefined),

@@ -1,22 +1,27 @@
 import { BRIEF_RETENTION_DAYS } from "../config.js";
 import type { BriefSummary } from "../db/queries/briefs.js";
-import type { ComposedBrief } from "../ranking/compose.js";
+import type { ScoredThread } from "../signals/score.js";
 import { formatLocalTime } from "../time.js";
 import { escapeHtml } from "./admin.js";
+import type { LegacyComposed } from "./briefPage.js";
+import { renderScoringSection, SCORING_STYLE } from "./scoringPage.js";
 
 /**
- * Brief history, for tuning.
+ * Briefs: what was sent, and why it was chosen.
  *
- * The point is comparison: seeing a week of mornings side by side is how you
- * notice that the same item keeps surfacing, or that ranking drifted after a
- * weight change. So each card shows what was actually sent rather than a
- * summary of it.
+ * One page rather than two. The history is for comparison — seeing a week of
+ * mornings side by side is how you notice the same item keeps surfacing, or that
+ * ranking drifted after a weight change — and the live scoring above it is what
+ * you change in response. Splitting them meant reading one and remembering it
+ * while looking at the other.
  */
 
 export const BRIEFS_PER_PAGE = 10;
 
 interface StoredPayload {
-  composed?: ComposedBrief;
+  composed?: LegacyComposed;
+  meetings?: string[];
+  conflicts?: string[];
   text?: string;
   error?: string;
 }
@@ -80,8 +85,26 @@ const STYLE = `
   }
   nav span { opacity: .35; }
   nav .count { border: 0; opacity: .5; margin-left: auto; }
-  .empty { padding: 3rem 0; opacity: .6; }
-`;
+  .empty { padding: 2.5rem 0; opacity: .6; }
+  .sched { font-variant-numeric: tabular-nums; }
+  .sched div {
+    padding: .2rem 0; white-space: pre-wrap;
+    border-bottom: 1px solid color-mix(in srgb, CanvasText 8%, transparent);
+  }
+  .sched div:last-child { border-bottom: 0; }
+  .conflict { color: #b45309; font-size: .88rem; margin-top: .4rem; }
+  @media (prefers-color-scheme: dark) { .conflict { color: #fbbf24; } }
+  h2.section {
+    font-size: .72rem; text-transform: uppercase; letter-spacing: .07em;
+    opacity: .55; font-weight: 700; margin: 0 0 .3rem;
+  }
+  .section-sub { opacity: .55; font-size: .82rem; margin: 0 0 1rem; }
+  .block { margin-bottom: 3rem; }
+  .block + .block {
+    padding-top: 2.25rem;
+    border-top: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
+  }
+${SCORING_STYLE}`;
 
 function statusClass(status: string): string {
   return status === "sent" ? "sent" : status === "failed" ? "failed" : "pending";
@@ -91,13 +114,37 @@ function renderCard(brief: BriefSummary): string {
   const payload = (brief.payload ?? {}) as StoredPayload;
   const c = payload.composed;
 
+  // Older rows carry a model-written schedule line instead of rendered meetings.
+  const schedule = payload.meetings?.length
+    ? `<div class="label">Meetings (${payload.meetings.length})</div>
+       <div class="sched">${payload.meetings
+         .map((m) => `<div>${escapeHtml(m)}</div>`)
+         .join("")}</div>`
+    : c?.meetings_line
+      ? `<div class="line">${escapeHtml(c.meetings_line)}</div>`
+      : "";
+
+  const conflicts = payload.conflicts?.length
+    ? payload.conflicts
+        .map((x) => `<div class="line conflict">${escapeHtml(x)}</div>`)
+        .join("")
+    : c?.conflicts_line
+      ? `<div class="line conflict">${escapeHtml(c.conflicts_line)}</div>`
+      : "";
+
   const body = c
     ? `
-      ${c.meetings_line ? `<div class="line">${escapeHtml(c.meetings_line)}</div>` : ""}
-      ${c.conflicts_line ? `<div class="line"><strong>Conflicts:</strong> ${escapeHtml(c.conflicts_line)}</div>` : ""}
+      ${schedule}
+      ${conflicts}
+      ${
+        c.priorities.length
+          ? `<div class="label">Priorities</div>
+             <ol>${c.priorities.map((p) => `<li>${escapeHtml(p)}</li>`).join("")}</ol>`
+          : ""
+      }
       ${
         c.emails.length
-          ? `<div class="label">Needs you (${c.emails.length})</div>
+          ? `<div class="label">Needs a reply (${c.emails.length})</div>
              <ol>${c.emails
                .map(
                  (e) =>
@@ -106,13 +153,7 @@ function renderCard(brief: BriefSummary): string {
                    }</li>`,
                )
                .join("")}</ol>`
-          : `<div class="label">Needs you</div><div class="line" style="opacity:.55">Nothing surfaced.</div>`
-      }
-      ${
-        c.priorities.length
-          ? `<div class="label">Priorities</div>
-             <ol>${c.priorities.map((p) => `<li>${escapeHtml(p)}</li>`).join("")}</ol>`
-          : ""
+          : `<div class="label">Needs a reply</div><div class="line" style="opacity:.55">Nothing surfaced.</div>`
       }`
     : payload.error
       ? `<div class="err">${escapeHtml(payload.error)}</div>`
@@ -144,6 +185,7 @@ export function renderBriefsPage(
   briefs: BriefSummary[],
   requestedPage: number,
   total: number,
+  scored: ScoredThread[],
 ): string {
   const lastPage = Math.max(1, Math.ceil(total / BRIEFS_PER_PAGE));
   // A hand-edited page number past the end should read as the last page rather
@@ -164,29 +206,41 @@ export function renderBriefsPage(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Brief history — ops-agent</title>
+  <title>Briefs — ops-agent</title>
   <style>${STYLE}</style>
 </head>
 <body>
   <main>
     <header>
-      <h1>Brief history</h1>
+      <h1>Briefs</h1>
       <a href="/">← Accounts</a>
     </header>
-    <div class="sub">
-      ${total} brief${total === 1 ? "" : "s"} kept. Older than ${BRIEF_RETENTION_DAYS} days are deleted automatically.
+    <div class="sub">What went out, and what would go out right now.</div>
+
+    <div class="block">
+      <h2 class="section">Ranking right now</h2>
+      <p class="section-sub">
+        Recomputed live against the mail currently synced and the weights currently deployed.
+      </p>
+      ${renderScoringSection(scored)}
     </div>
 
-    ${
-      briefs.length === 0
-        ? `<div class="empty">No briefs yet. One is recorded each morning after delivery.</div>`
-        : briefs.map(renderCard).join("")
-    }
+    <div class="block">
+      <h2 class="section">History</h2>
+      <p class="section-sub">
+        ${total} brief${total === 1 ? "" : "s"} kept. Older than ${BRIEF_RETENTION_DAYS} days are deleted automatically.
+      </p>
+      ${
+        briefs.length === 0
+          ? `<div class="empty">No briefs yet. One is recorded each morning after delivery.</div>`
+          : briefs.map(renderCard).join("")
+      }
 
-    <nav>
-      ${prev}${next}
-      <span class="count">page ${page} of ${lastPage}</span>
-    </nav>
+      <nav>
+        ${prev}${next}
+        <span class="count">page ${page} of ${lastPage}</span>
+      </nav>
+    </div>
   </main>
 </body>
 </html>`;

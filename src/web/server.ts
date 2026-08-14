@@ -30,7 +30,6 @@ import { renderAccountsPage, type AdminNotice } from "./admin.js";
 import { jobState, startJob } from "./jobs.js";
 import { renderBriefPage, type BriefPayload } from "./briefPage.js";
 import { BRIEFS_PER_PAGE, renderBriefsPage } from "./briefsPage.js";
-import { renderScoringPage } from "./scoringPage.js";
 import { scoreAllCandidates } from "../ranking/candidates.js";
 import { handleCallback, handleConnect } from "./oauth.js";
 
@@ -135,14 +134,13 @@ async function handleSettingsPost(
 }
 
 /**
- * Starts a job and redirects immediately.
+ * Sync, then brief. Starts in the background and redirects immediately.
  *
- * These take far longer than a request should — a cold-start sync across
+ * A run takes far longer than a request should — a cold-start sync across
  * fifteen mailboxes is minutes, and the brief waits on a model call — so the
- * work runs in the background and the console polls by refreshing itself.
+ * work runs detached and the console polls by refreshing itself.
  */
 async function handleRunPost(
-  path: string,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
@@ -152,38 +150,28 @@ async function handleRunPost(
     return;
   }
 
-  const form = await readFormBody(req);
-  let started: boolean;
-  let label: string;
+  const started = startJob(async () => {
+    const { syncAll } = await import("../jobs/sync.js");
+    const { runBrief } = await import("../jobs/brief.js");
 
-  if (path === "/run/sync") {
-    label = "Sync";
-    started = startJob("sync", async () => {
-      const { syncAll } = await import("../jobs/sync.js");
-      const summary = await syncAll();
-      return {
-        summary:
-          `${summary.synced.length} account(s) synced` +
-          (summary.skipped.length ? `, ${summary.skipped.length} skipped` : ""),
-        detail: summary.skipped.length
-          ? summary.skipped.map((s) => `${s.email}: ${s.reason}`).join("\n")
-          : undefined,
-      };
-    });
-  } else {
-    const preview = form.get("mode") !== "send";
-    label = preview ? "Preview" : "Send";
-    started = startJob("brief", async () => {
-      const { runBrief } = await import("../jobs/brief.js");
-      // force: the console button means "now", not "if it happens to be 6am".
-      const result = await runBrief(new Date(), { dryRun: preview, force: true });
-      return { summary: result.message, detail: result.text };
-    });
-  }
+    // Same rule as the scheduled worker: a sync that fails outright must not
+    // cost him the brief. Postgres already holds days of thread state.
+    let syncNote: string;
+    try {
+      const sync = await syncAll();
+      syncNote =
+        `Synced ${sync.synced.length} account(s)` +
+        (sync.skipped.length ? `, ${sync.skipped.length} skipped` : "");
+    } catch (err) {
+      syncNote = `Sync failed (${err instanceof Error ? err.message : String(err)}); briefed from stored data`;
+    }
 
-  const notice = started
-    ? `${label} started`
-    : `${label} is already running`;
+    // force: the button means "now", not "if it happens to be the brief hour".
+    const result = await runBrief(new Date(), { force: true });
+    return `${syncNote}. ${result.message}`;
+  });
+
+  const notice = started ? "Run started" : "A run is already in progress";
   res.writeHead(303, { Location: `/?saved=${encodeURIComponent(notice)}` });
   res.end();
 }
@@ -239,7 +227,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const path = url.pathname;
 
   if (req.method === "POST") {
-    const postPaths = ["/settings", "/run/sync", "/run/brief", "/accounts/disconnect"];
+    const postPaths = ["/settings", "/run", "/accounts/disconnect"];
     if (!postPaths.includes(path)) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("Not found\n");
@@ -254,7 +242,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     } else if (path === "/accounts/disconnect") {
       await handleDisconnectPost(req, res);
     } else {
-      await handleRunPost(path, req, res);
+      await handleRunPost(req, res);
     }
     return;
   }
@@ -337,7 +325,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         accounts,
         recipient,
         notice,
-        { sync: jobState("sync"), brief: jobState("brief") },
+        jobState(),
         synced,
         hour,
       ),
@@ -351,19 +339,21 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const requested = Number.parseInt(url.searchParams.get("page") ?? "1", 10);
     const page = Number.isFinite(requested) && requested > 0 ? requested : 1;
 
-    const [total, briefs] = await Promise.all([
+    const [total, briefs, scored] = await Promise.all([
       countBriefs(),
       listBriefs(BRIEFS_PER_PAGE, (page - 1) * BRIEFS_PER_PAGE),
+      scoreAllCandidates(),
     ]);
 
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(renderBriefsPage(briefs, page, total));
+    res.end(renderBriefsPage(briefs, page, total, scored));
     return;
   }
 
+  // Scoring folded into /briefs. Kept as a redirect because it is bookmarked.
   if (path === "/scoring") {
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(renderScoringPage(await scoreAllCandidates()));
+    res.writeHead(303, { Location: "/briefs" });
+    res.end();
     return;
   }
 
