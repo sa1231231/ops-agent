@@ -7,6 +7,7 @@ import {
   markBriefSent,
   pruneOldBriefs,
   saveBriefItems,
+  scheduledSendExists,
 } from "../db/queries/briefs.js";
 import { briefHour, briefRecipient } from "../db/queries/settings.js";
 import { formatSkippedAccounts, notifyOperator } from "../outputs/operatorEmail.js";
@@ -38,10 +39,15 @@ export interface BriefRunOptions {
   dryRun?: boolean;
   /** Ignore the BRIEF_HOUR gate — used by the console's manual trigger. */
   force?: boolean;
+  /**
+   * Who asked. "scheduled" runs at most once per local day; "manual" is
+   * unlimited, which is the whole point of the console button.
+   */
+  trigger?: "scheduled" | "manual";
 }
 
 export interface BriefRunResult {
-  status: "sent" | "preview" | "not-due";
+  status: "sent" | "preview" | "not-due" | "already-sent";
   message: string;
   text?: string;
   briefUrl?: string;
@@ -70,6 +76,7 @@ export async function runBrief(
 ): Promise<BriefRunResult> {
   const dryRun = options.dryRun ?? ENV_DRY_RUN;
   const force = options.force ?? ENV_FORCE;
+  const trigger = options.trigger ?? "manual";
   const localDate = localDateString(now);
 
   // Railway cron is UTC, so the job fires hourly and gates on his local hour.
@@ -83,9 +90,16 @@ export async function runBrief(
     return { status: "not-due", message };
   }
 
-  // A preview records nothing at all; a real send always creates a row. There
-  // is deliberately no one-per-day lock — the hour gate is what stops the
-  // scheduler firing twice, and a test send must not consume the day's slot.
+  // The hour gate stops a single scheduler firing twice. This stops *two*
+  // schedulers — an in-process one and a platform cron — from both sending.
+  // Manual runs are unaffected, deliberately.
+  if (trigger === "scheduled" && !dryRun && (await scheduledSendExists(localDate))) {
+    const message = `Already sent on schedule for ${localDate} — nothing to do`;
+    console.log(`[brief] ${message}`);
+    return { status: "already-sent", message };
+  }
+
+  // A preview records nothing at all; a real send always creates a row.
   const brief = dryRun ? null : await createBrief(localDate);
 
   try {
@@ -197,7 +211,7 @@ export async function runBrief(
 
     await markBriefSent(
       brief!.id,
-      { composed, meetings: meetingList, conflicts: conflictList, text, briefUrl, scoring },
+      { trigger, composed, meetings: meetingList, conflicts: conflictList, text, briefUrl, scoring },
       messageSid,
       skippedEmails,
     );

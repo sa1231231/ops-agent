@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { HOST, PORT, PUBLIC_BASE_URL, requireEnv } from "../config.js";
+import { HOST, optionalEnv, PORT, PUBLIC_BASE_URL, requireEnv } from "../config.js";
+import { startScheduler } from "../jobs/scheduler.js";
 import { BRIEF_HOUR } from "../time.js";
 import { assertEncryptionReady } from "../auth/crypto.js";
 import { pool } from "../db/pool.js";
@@ -385,6 +386,11 @@ async function main(): Promise<void> {
   requireEnv("GOOGLE_CLIENT_SECRET");
   requireEnv("OAUTH_REDIRECT_URI");
   await pool.query("select 1");
+
+  // Opt-in, so exactly one thing in a deployment drives the schedule. Started
+  // after the database check: a scheduler in a process that cannot reach
+  // Postgres just emails the operator every hour.
+  if (optionalEnv("ENABLE_SCHEDULER", "") === "1") startScheduler();
 
   server.listen(PORT, HOST, () => {
     console.log(`[web] listening on ${HOST}:${PORT} (${PUBLIC_BASE_URL})`);

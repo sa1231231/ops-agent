@@ -6,23 +6,27 @@ import { runBrief } from "./brief.js";
 import { syncAll } from "./sync.js";
 
 /**
- * The scheduled worker. Runs hourly, does both jobs, and exits.
+ * One scheduled cycle: sync every account, then attempt the brief.
  *
- * One schedule rather than two: the brief already self-gates on BRIEF_HOUR and
- * on its own idempotency row, so attempting it every hour is safe and costs a
- * database round trip on the twenty-three hours it does nothing.
+ * One schedule rather than two: the brief self-gates on the configured hour, so
+ * attempting it every hour is safe and costs a database round trip on the
+ * twenty-three hours it does nothing.
  *
  * Syncing hourly is not about completeness — the Gmail history cursor picks up
  * everything since the last successful run, so one sync a day would capture the
  * same messages. It is about not letting a single failed sync ship a brief built
  * on yesterday's data, which would look completely normal and be wrong.
+ *
+ * `runCycle` is the whole job. It is called both by this file's CLI entrypoint
+ * (a container that runs and exits, if a platform cron is driving it) and by the
+ * in-process scheduler in the web service. Same code either way.
  */
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-async function main(): Promise<void> {
+export async function runCycle(): Promise<{ syncFailed: string | null }> {
   const started = Date.now();
   let syncFailed: string | null = null;
 
@@ -50,7 +54,7 @@ async function main(): Promise<void> {
     });
   }
 
-  const result = await runBrief();
+  const result = await runBrief(new Date(), { trigger: "scheduled" });
   console.log(`[worker] brief: ${result.status} — ${result.message}`);
 
   // Read the configured hour, not the env fallback: the gate uses the console
@@ -61,22 +65,35 @@ async function main(): Promise<void> {
       `(${localHour()}:00 ${BRIEF_TZ}, brief hour is ${configuredHour}:00)`,
   );
 
-  // A sync that died outright is worth a non-zero exit so the platform shows the
-  // run as failed, even though the brief itself may have gone out fine.
-  if (syncFailed) process.exitCode = 1;
+  return { syncFailed };
 }
 
-main()
-  .then(() => pool.end())
-  .catch(async (err: unknown) => {
-    console.error("[worker] fatal:", errorText(err));
-    await notifyOperator({
-      subject: "the scheduled run did not complete",
-      body:
-        "The hourly worker stopped before finishing. Neither sync nor the brief " +
-        "can be assumed to have run.\n\n" +
-        `  ${errorText(err)}`,
-    });
-    await pool.end();
-    process.exit(1);
+/** Alerts the operator that a whole cycle died. Shared by both callers. */
+export async function reportCycleFailure(err: unknown): Promise<void> {
+  console.error("[worker] fatal:", errorText(err));
+  await notifyOperator({
+    subject: "the scheduled run did not complete",
+    body:
+      "The hourly run stopped before finishing. Neither sync nor the brief " +
+      "can be assumed to have run.\n\n" +
+      `  ${errorText(err)}`,
   });
+}
+
+const isEntrypoint =
+  process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`;
+
+if (isEntrypoint) {
+  runCycle()
+    .then(async ({ syncFailed }) => {
+      // A sync that died outright is worth a non-zero exit so the platform shows
+      // the run as failed, even though the brief itself may have gone out fine.
+      if (syncFailed) process.exitCode = 1;
+      await pool.end();
+    })
+    .catch(async (err: unknown) => {
+      await reportCycleFailure(err);
+      await pool.end();
+      process.exit(1);
+    });
+}

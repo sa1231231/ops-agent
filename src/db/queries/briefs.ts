@@ -135,6 +135,27 @@ export async function markBriefSent(
   );
 }
 
+/**
+ * Whether the scheduler already sent today's brief.
+ *
+ * Deliberately narrower than the UNIQUE constraint this replaces. That one
+ * blocked *any* second brief for a date, which meant a manual test send
+ * consumed the day's slot and killed the scheduled one — unworkable while
+ * format and ranking are being tuned. This only stops two schedulers from
+ * both firing, and says nothing about manual runs, which stay unlimited.
+ */
+export async function scheduledSendExists(localDate: string): Promise<boolean> {
+  const { rowCount } = await pool.query(
+    `select 1 from briefs
+      where local_date = $1::date
+        and status = 'sent'
+        and payload->>'trigger' = 'scheduled'
+      limit 1`,
+    [localDate],
+  );
+  return (rowCount ?? 0) > 0;
+}
+
 export async function markBriefFailed(briefId: number, payload: unknown): Promise<void> {
   await pool.query(
     `update briefs set status = 'failed', payload = $2::jsonb where id = $1`,
