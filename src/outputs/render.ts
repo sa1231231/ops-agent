@@ -24,6 +24,8 @@ export interface RenderOptions {
   meetings: string[];
   /** Pre-rendered by `conflictLines()`. */
   conflicts: string[];
+  /** Addressed in the greeting. Empty for a bare "Good morning". */
+  greetingName: string;
 }
 
 /**
@@ -82,30 +84,46 @@ export function meetingLines(meetings: Meeting[]): string[] {
 }
 
 /**
- * Conflicts read as part of the schedule rather than as a separate warning
- * section — they are a property of the day, and splitting them off meant
- * reading the same two meetings twice.
+ * Only genuine double-bookings reach the message.
+ *
+ * `findConflicts` also reports back-to-backs, which are worth knowing about but
+ * are not problems — his standups butt against each other every single morning,
+ * so a "no gap" line fired daily and taught him to skip the section. A meeting
+ * he cannot attend because he is in another one is the thing that needs him.
+ *
+ * Overlapping meetings are grouped into clusters rather than listed pairwise: a
+ * triple booking produces three pairs, and three lines describing one problem
+ * reads as three problems.
  */
 export function conflictLines(conflicts: Conflict[]): string[] {
-  return conflicts.map((c) => {
-    const a = `${meetingTime(c.a)} ${clip(c.a.title ?? "(untitled)", CONFLICT_TITLE_MAX)}`;
-    const b = `${meetingTime(c.b)} ${clip(c.b.title ?? "(untitled)", CONFLICT_TITLE_MAX)}`;
-    return c.kind === "overlap"
-      ? `Overlap - ${a} and ${b}`
-      : `No gap - ${a} runs into ${b}`;
-  });
-}
+  const overlaps = conflicts.filter((c) => c.kind === "overlap");
+  if (overlaps.length === 0) return [];
 
-/** "Thursday, Aug 14". Noon UTC so the weekday is right in every timezone. */
-function dayLabel(localDate: string): string {
-  const at = new Date(`${localDate}T12:00:00Z`);
-  if (Number.isNaN(at.getTime())) return localDate;
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: "UTC",
-    weekday: "long",
-    month: "short",
-    day: "numeric",
-  }).format(at);
+  // Union-find over meetings, keyed by identity: anything transitively
+  // overlapping belongs in one line.
+  const clusters: Meeting[][] = [];
+  for (const { a, b } of overlaps) {
+    const found = clusters.filter((c) => c.includes(a) || c.includes(b));
+    const merged = [...new Set([...found.flat(), a, b])];
+    for (const c of found) clusters.splice(clusters.indexOf(c), 1);
+    clusters.push(merged);
+  }
+
+  return clusters.map((cluster) => {
+    const sorted = [...cluster].sort(
+      (x, y) => x.startsAt.getTime() - y.startsAt.getTime(),
+    );
+    const label =
+      sorted.length === 2
+        ? "Double-booked"
+        : sorted.length === 3
+          ? "Triple-booked"
+          : `${sorted.length} meetings overlap`;
+    const parts = sorted.map(
+      (m) => `${meetingTime(m)} ${clip(m.title ?? "(untitled)", CONFLICT_TITLE_MAX)}`,
+    );
+    return `${label} - ${parts.join(" / ")}`;
+  });
 }
 
 /**
@@ -119,7 +137,12 @@ export function renderPlainText(
   brief: ComposedBrief,
   opts: RenderOptions,
 ): string {
-  const lines: string[] = [dayLabel(opts.localDate), ""];
+  // No date line. He reads this the morning it is sent, on a phone that already
+  // shows him the date twice.
+  const greeting = opts.greetingName
+    ? `Good morning, ${opts.greetingName}`
+    : "Good morning";
+  const lines: string[] = [greeting, ""];
 
   lines.push(opts.meetings.length ? `MEETINGS (${opts.meetings.length})` : "MEETINGS");
   if (opts.meetings.length === 0) {
@@ -136,20 +159,21 @@ export function renderPlainText(
 
   if (brief.priorities.length > 0) {
     lines.push("PRIORITIES");
+    // Blank line after each: priorities run long enough to wrap, and without the
+    // separation three wrapped items read as one paragraph.
     brief.priorities.forEach((p, i) => {
       lines.push(`${i + 1}. ${p}`);
+      lines.push("");
     });
-    lines.push("");
   }
 
   if (brief.emails.length > 0) {
     lines.push("NEEDS A REPLY");
+    // `reason` is still composed and still stored — carry-over, the brief page,
+    // and the history all use it. It just does not go in the message: "unanswered
+    // 4 days, deadline today" restated what the line above already said.
     brief.emails.forEach((e, i) => {
       lines.push(`${i + 1}. ${e.line}`);
-      // The reason gets its own indented line rather than a parenthetical: it is
-      // the part he reads to decide whether to act now, and it was disappearing
-      // into the wrap when it trailed the subject.
-      if (e.reason) lines.push(`   ${e.reason}`);
     });
     lines.push("");
   }

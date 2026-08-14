@@ -19,9 +19,11 @@ import {
   listBriefs,
 } from "../db/queries/briefs.js";
 import {
+  briefGreetingName,
   briefHour,
   deleteSetting,
   getSetting,
+  normalizeGreetingName,
   normalizeHour,
   normalizePhoneNumber,
   setSetting,
@@ -113,6 +115,15 @@ async function handleSettingsPost(
         normalizeHour(form.get(SETTING_KEYS.briefHour) ?? ""),
       );
       query = "?saved=" + encodeURIComponent("Brief time saved.");
+    } else if (form.has(SETTING_KEYS.briefGreetingName)) {
+      const name = normalizeGreetingName(form.get(SETTING_KEYS.briefGreetingName) ?? "");
+      if (name === "") {
+        await deleteSetting(SETTING_KEYS.briefGreetingName);
+        query = "?saved=" + encodeURIComponent('Greeting is now just "Good morning".');
+      } else {
+        await setSetting(SETTING_KEYS.briefGreetingName, name);
+        query = "?saved=" + encodeURIComponent(`Greeting saved — "Good morning, ${name}".`);
+      }
     } else {
       const raw = (form.get(SETTING_KEYS.briefRecipient) ?? "").trim();
       if (raw === "") {
@@ -313,11 +324,12 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
           ? { ok: true, message: saved === "1" ? "Saved." : saved }
           : null;
 
-    const [accounts, recipient, synced, hour] = await Promise.all([
+    const [accounts, recipient, synced, hour, greeting] = await Promise.all([
       listAccounts(),
       getSetting(SETTING_KEYS.briefRecipient),
       lastSyncedAt(),
       briefHour(BRIEF_HOUR),
+      briefGreetingName(),
     ]);
 
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -329,6 +341,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         jobState(),
         synced,
         hour,
+        greeting,
       ),
     );
     return;

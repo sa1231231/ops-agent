@@ -9,7 +9,7 @@ import {
   saveBriefItems,
   scheduledSendExists,
 } from "../db/queries/briefs.js";
-import { briefHour, briefRecipient } from "../db/queries/settings.js";
+import { briefGreetingName, briefHour, briefRecipient } from "../db/queries/settings.js";
 import { formatSkippedAccounts, notifyOperator } from "../outputs/operatorEmail.js";
 import {
   conflictLines,
@@ -17,7 +17,7 @@ import {
   meetingLines,
   renderPlainText,
 } from "../outputs/render.js";
-import { deliveryChannel, sendSms } from "../outputs/sms.js";
+import { deliveryChannel, sendOperatorCopy, sendSms } from "../outputs/sms.js";
 import { buildTemplateVariables, sendBrief as sendWhatsApp } from "../outputs/whatsapp.js";
 import { composeBrief } from "../ranking/compose.js";
 import { findConflicts, meetingsForLocalDay } from "../ranking/meetings.js";
@@ -79,8 +79,8 @@ export async function runBrief(
   const trigger = options.trigger ?? "manual";
   const localDate = localDateString(now);
 
-  // Railway cron is UTC, so the job fires hourly and gates on his local hour.
-  // This survives DST without a twice-yearly adjustment.
+  // Container clocks are UTC, so the cycle fires hourly and gates on his local
+  // hour. This survives DST without a twice-yearly adjustment.
   // The configured hour wins; the env var is only a fallback for a fresh
   // deployment where nobody has opened the console yet.
   const targetHour = await briefHour(BRIEF_HOUR);
@@ -141,6 +141,7 @@ export async function runBrief(
       skippedAccounts: skippedEmails,
       meetings: meetingList,
       conflicts: conflictList,
+      greetingName: await briefGreetingName(),
     });
 
     const channel = deliveryChannel();
@@ -163,10 +164,10 @@ export async function runBrief(
     if (channel === "sms") {
       // Console-configured recipient wins; the env var is only a fallback so a
       // fresh deployment can deliver before anyone opens the console.
-      messageSid = await sendSms(
-        text,
-        await briefRecipient(optionalEnv("CLIENT_SMS_NUMBER", "")),
-      );
+      const recipient = await briefRecipient(optionalEnv("CLIENT_SMS_NUMBER", ""));
+      messageSid = await sendSms(text, recipient);
+      // After the client's, and never fatal: the brief is already delivered.
+      await sendOperatorCopy(text, recipient);
     } else if (channel === "whatsapp") {
       messageSid = await sendWhatsApp(
         buildTemplateVariables(composed, {
@@ -194,7 +195,7 @@ export async function runBrief(
       })),
     );
 
-    // Snapshot why these were chosen. The live /scoring page recomputes from
+    // Snapshot why these were chosen. The live scoring view recomputes from
     // current data, which cannot answer "why did Tuesday's brief pick that" —
     // messages and the correspondent graph have moved on since.
     const scoring = candidates.map((t) => ({

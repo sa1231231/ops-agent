@@ -87,9 +87,9 @@ src/
   sources/    gmail.ts, calendar.ts        → normalize into Postgres
   signals/    weights.ts, score.ts         → pure functions over DB rows
   ranking/    candidates.ts, compose.ts    → prefilter, then one LLM call
-  outputs/    sms.ts, render.ts, whatsapp.ts, operatorEmail.ts
+  outputs/    render.ts (layout), sms.ts, whatsapp.ts, operatorEmail.ts
   web/        server.ts, admin.ts, oauth.ts, briefPage.ts, briefsPage.ts, scoringPage.ts, jobs.ts
-  jobs/       sync.ts, brief.ts, worker.ts, scheduler.ts
+  jobs/       sync.ts, brief.ts, worker.ts (runCycle), scheduler.ts (hourly tick)
 ```
 
 The `sources → signals → ranking → outputs` split is what keeps this from becoming a digest-only codebase. `signals/` scores threads with **no knowledge of "today"**; a future search capability calls the same scorer with a different candidate set.
@@ -103,7 +103,7 @@ The `sources → signals → ranking → outputs` split is what keeps this from 
 - **`threads`** — account_id, gmail_thread_id, subject, `last_inbound_at`, `last_outbound_at`, `awaiting_reply`, participants[] · UNIQUE(account_id, gmail_thread_id)
 - **`correspondents`** — PK(account_id, email), outbound_count, inbound_count, last_outbound_at, last_inbound_at — *the sender graph*
 - **`events`** — account_id, gcal_event_id, calendar_id, title, description, starts_at, ends_at, all_day, attendees jsonb, organizer_email, self_response_status, status · UNIQUE(account_id, gcal_event_id)
-- **`briefs`** — local_date (indexed, **not** unique — several per day allowed), payload jsonb (composed brief + rendered text + scoring snapshot), status, message_sid, sent_at, share_token, share_expires_at
+- **`briefs`** — local_date (indexed, **not** unique — several per day allowed), payload jsonb (`trigger`, composed brief, rendered meeting and conflict lines, rendered text, scoring snapshot), status, message_sid, sent_at, share_token, share_expires_at
 - **`brief_items`** — brief_id, kind, ref_key, rank, reason, `first_seen_brief_date` — *carry-over state*
 - **`sync_runs`** — account_id, source, started_at, finished_at, status, error, counts jsonb
 
@@ -163,16 +163,19 @@ Deterministic rules narrow the field first; only survivors go to the model. Keep
 - Days awaiting, on a curve **peaking at 2–7 days**, not linear recency
 - Addressed directly: `To:` > `Cc:` > neither
 - Correspondent strength from the sender graph (how often and how recently he emails them)
-- Sender is an attendee of a meeting today or tomorrow
-- Sender attended a meeting in the last two days with nothing sent since
+- Sender is an attendee of a meeting within `MEETING_SOON_HOURS` (48)
+- Sender attended a meeting within `MET_RECENTLY_DAYS` (2) with nothing sent since
 - Explicit ask detected (question marks, "can you", deadline language, near-future dates)
 
 **Demotions**
-- `List-Unsubscribe` header present · `Precedence: bulk`
-- `no-reply@` / `donotreply@` / `notifications@`
-- Known notification senders (GitHub, Jira, Slack digests), receipts, marketing
+- `NOTIFICATION_RELAY` (−60) — Slack, Discord, Google Voice, LinkedIn, Zoom and similar. The real conversation lives in that app; the email is a doorbell. Generalized from a Google Voice special case, because the same reasoning covers every platform that emails "you have a message".
+- `AUTOMATED` (−40) — machine sender by address pattern, or `Precedence`/`Auto-Submitted` headers
+- `NEVER_CORRESPONDED` (−22) — he has never written to this address. Evidence from his own behaviour, and the main thing separating a person waiting on him from infrastructure that merely emails him.
+- `LIST_UNSUBSCRIBE` (−12) — mailing list, stacked on top of automated
 
-Take the top ~40–60 across all accounts. **Ties break deterministically** on `(score DESC, sent_at DESC, gmail_message_id ASC)` — never on iteration order.
+Relay and automated are **mutually exclusive**: most relays also match a machine-sender pattern, and stacking both reads as an arbitrary −100 in the scoring view. A relay also skips the correspondent graph entirely in both directions — the address changes every conversation, so it can neither earn known-correspondent nor be penalised as never-corresponded.
+
+Survivors need `MIN_SCORE_FOR_BRIEF` (25); at most `MAX_CANDIDATES` (50) reach the model, and nothing older than `CANDIDATE_MAX_AGE_DAYS` (45) is considered. **Ties break deterministically** on `(score DESC, last_inbound_at DESC, gmail_thread_id ASC)` — never on iteration order.
 
 ### The model call
 
@@ -196,7 +199,7 @@ Items from yesterday's `brief_items` that are still unanswered are passed into t
 
 ### Conflicts
 
-Interval overlap computed across the **merged** set of all ~15 calendars, normalized to one timezone — precisely the pain that fifteen calendars create. Also flag zero-gap back-to-backs and agenda-less meetings.
+Interval overlap computed across the **merged** set of all ~15 calendars, normalized to one timezone — precisely the pain that fifteen calendars create. `findConflicts` also detects zero-gap back-to-backs, and agenda-less meetings are flagged into the prompt; neither reaches the message (see *Message layout*).
 
 **Deduplicate on `(ical_uid, starts_at)` before computing overlap. Both halves of that key are load-bearing.**
 
@@ -245,28 +248,44 @@ SMS is the live channel; WhatsApp is kept behind `DELIVERY_CHANNEL` but unused.
 ### Message layout
 
 ```
-Friday, Aug 14
+Good morning, Payeman
 
 MEETINGS (5)
 7:00 AM  PAY IN FULL - Freedom Chase
 8:30 AM  cisa standup
 ...
 
-No gap - 8:30 AM cisa standup runs into 9:00 AM cdp standup
+Double-booked - 9:00 AM cdp standup / 9:15 AM Client call
 
 PRIORITIES
 1. ...
 
+2. ...
+
 NEEDS A REPLY
 1. <who and what they want>
-   <why it matters>
+2. ...
 
 <brief url>
 ```
 
 Schedule first because it is fixed and time-bound; priorities next because they are what he decides to do about the day; replies last because they are the backlog he works around them.
 
-One meeting per line, and each reply's reason on its own indented line. Both cost segments and both are deliberate — the reason used to trail the subject in parentheses and disappeared into the wrap, and it is the part he reads to decide whether to act now. Conflicts sit inside the meetings block rather than in their own section: a conflict is a property of the day, and splitting it off meant reading the same two meetings twice. Measured cost of the readable layout: 8 segments versus 7.
+**No date line.** He reads this the morning it is sent, on a phone already showing him the date.
+
+**The greeting name is a setting** (`brief_greeting_name`, default `Payeman`), editable in the console. A name hard-coded in source is a name only a developer can correct. Blank gives a bare "Good morning".
+
+**Only real double-bookings reach the message.** `findConflicts` still detects back-to-backs and the model still sees them, but they are filtered out of `conflictLines()` — his standups butt against each other every morning, so a "no gap" line fired daily and taught him to skip the section. Overlaps are grouped into clusters rather than listed pairwise, because a triple booking produces three pairs and three lines describing one problem reads as three problems.
+
+**Priorities get a blank line between them**; replies do not. Priorities wrap; without separation three wrapped items read as one paragraph. Reply lines are short enough not to need it.
+
+**Reply reasons are composed and stored but not sent.** Carry-over, the brief page, and the history all use `reason`; in the message it restated what the line above already said ("unanswered 4 days, deadline today" under a line that mentions the deadline). Measured: 6 segments.
+
+### The operator's copy
+
+`OPERATOR_SMS_NUMBER` gets the same text the client just received. Env var, deliberately not a console setting: **the console belongs to the client**, and this is the operator watching his own product go out. He needs the real message — segment count, wrapping, ranking — not a preview of it.
+
+Sent after the client's and never fatal. A bad operator number must not turn a delivered brief into a failed run. Skipped when it equals the client number, which it often does during tuning.
 
 ### Repeat sends
 
@@ -298,7 +317,47 @@ Cron and container clocks are UTC. The cycle runs **hourly** and gates on *"is i
 
 ### Operator alerts
 
-`outputs/operatorEmail.ts` — digest email on account auth failure, sync failure, brief-send failure, or a brief sent with any account skipped. Behind a `notifyOperator()` seam so the transport can be swapped. Recipient from `OPERATOR_EMAIL`. The same information is always visible on the admin console.
+`outputs/operatorEmail.ts` — email on account auth failure, sync failure, brief-send failure, or a brief sent with any account skipped. Behind a `notifyOperator()` seam so the transport can be swapped. Recipient from `OPERATOR_EMAIL`. The same information is always visible on the admin console.
+
+Format is a short note and nothing else:
+
+```
+Hi Sam,
+
+There was an error.
+
+<the detail>
+
+-ops-agent
+```
+
+No bracketed subject tags, no urgency words, no timestamp or console footer — filters read the first two as promotional markers, and the last two said nothing the mail client and his bookmarks did not already.
+
+**Deliverability.** These land in spam when sent from `onboarding@resend.dev`, Resend's shared sandbox domain, whose reputation belongs to every new Resend account at once. Wording helps at the margin; **verifying a real domain in Resend and pointing `OPERATOR_EMAIL_FROM` at an address on it is the actual fix.** Still outstanding.
+
+Alerting must never break the thing it reports on, so every failure inside `notifyOperator()` is logged and swallowed.
+
+---
+
+## Admin console
+
+Server-rendered template literals, no framework, no client JS, no build step. Basic auth against `ADMIN_SECRET` (constant-time compare over sha256 digests), same-origin checks on every POST, POST-redirect-GET so a refresh never resubmits.
+
+| Route | What it is |
+|---|---|
+| `GET /` | Accounts table, brief settings, and the one run button |
+| `GET /briefs` | Live scoring and brief history, one page |
+| `GET /scoring` | 303 to `/briefs` — kept because it was bookmarked |
+| `GET /connect` → `GET /oauth/callback` | The single OAuth path |
+| `POST /settings` | Recipient, greeting name, send hour — one endpoint, three independent forms |
+| `POST /run` | Sync then brief, started in the background |
+| `POST /accounts/disconnect` | Revoke at Google, erase stored data, keep the row |
+| `GET /brief/:token` | The full brief page. **Unauthenticated by design** — he opens it on a phone at 6:30am and a password prompt defeats the purpose. The token is unguessable and expiring, and grants nothing beyond one composed brief. |
+| `GET /healthz` | Liveness |
+
+Each settings form posts only its own field, so saving the hour cannot wipe the recipient. Values are validated on save — a bad phone number becomes a form error now rather than a failed brief at 6am.
+
+**Disconnect** revokes the refresh token at Google *before* wiping locally: telling Google is what makes the access actually gone rather than merely unused. A revoke failure is logged, not fatal. The account row survives marked `disabled`, so reconnecting the same address later is an ordinary upsert, and `meetingsForLocalDay` filters disabled accounts so a disconnect stops influencing the brief immediately rather than at the next sync.
 
 ---
 
@@ -308,12 +367,16 @@ Cron and container clocks are UTC. The cycle runs **hourly** and gates on *"is i
 DATABASE_URL           TOKEN_ENC_KEY          GOOGLE_CLIENT_ID
 GOOGLE_CLIENT_SECRET   OAUTH_REDIRECT_URI     ADMIN_SECRET
 ANTHROPIC_API_KEY      TWILIO_ACCOUNT_SID     TWILIO_AUTH_TOKEN
+TWILIO_SMS_FROM        CLIENT_SMS_NUMBER      DELIVERY_CHANNEL
 TWILIO_WHATSAPP_FROM   WHATSAPP_TEMPLATE_SID  CLIENT_WHATSAPP_NUMBER
-OPERATOR_EMAIL         RESEND_API_KEY         BRIEF_TZ
-BRIEF_HOUR             PUBLIC_BASE_URL        ENABLE_SCHEDULER
+OPERATOR_EMAIL         OPERATOR_EMAIL_FROM    RESEND_API_KEY
+OPERATOR_SMS_NUMBER    BRIEF_TZ               BRIEF_HOUR
+PUBLIC_BASE_URL        ENABLE_SCHEDULER
 ```
 
 `ENABLE_SCHEDULER=1` is set on the web service and nowhere else. `BRIEF_HOUR` and `CLIENT_SMS_NUMBER` are fallbacks only — the console settings win once saved.
+
+**Which settings live where, and why.** Secrets stay in env so a database dump leaks nothing. Things the *client* changes (recipient number, greeting name, send hour) live in the `settings` table and are editable in the console. Things the *operator* controls (`OPERATOR_SMS_NUMBER`, `OPERATOR_EMAIL`, `ENABLE_SCHEDULER`) stay in env and are deliberately invisible to the console — the console is the client's.
 
 `.env` is gitignored. It holds the token encryption key, OAuth secrets, and the Twilio and Anthropic keys — never commit it.
 
@@ -322,6 +385,9 @@ BRIEF_HOUR             PUBLIC_BASE_URL        ENABLE_SCHEDULER
 ## Runbook
 
 - **Connect an account** — admin console `/` → Connect account → Google consent. Workspace domains may need an admin allowlist first (see OAuth above).
-- **Where alerts go** — `OPERATOR_EMAIL`, plus status and `last_error` on the admin console accounts table. Never the client's WhatsApp.
-- **Force a brief** — run `jobs/brief.ts`. Use `DRY_RUN=1` to render without sending. Note the `local_date` uniqueness gate: delete the day's `briefs` row to genuinely re-send.
+- **Where alerts go** — `OPERATOR_EMAIL`, plus status and `last_error` on the admin console accounts table. Never the client's phone.
+- **Send a brief now** — console `/` → **Sync and send brief**. It syncs first and sends for real; there is no lock on manual sends, so it works any number of times a day.
+- **Render without sending** — `DRY_RUN=1 npx tsx src/jobs/brief.ts --force`. Records nothing, sends nothing, prints the exact message and its segment count.
+- **Check the schedule is alive** — web service logs show `[scheduler] next run in Nm` at boot and a `[worker] done in Ns (HH:00 …, brief hour is HH:00)` line each hour.
+- **Tune ranking** — `/briefs` shows every candidate scored live with the reasons that decided it. Change `signals/weights.ts`, push, reload.
 - **An account went red** — check its `last_error` and latest `sync_runs` row. Usually a revoked refresh token; reconnect via `/connect`. The brief keeps working meanwhile and will name the account as skipped.

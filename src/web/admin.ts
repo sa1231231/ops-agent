@@ -153,6 +153,7 @@ export function renderAccountsPage(
   job: JobState | null = null,
   lastSynced: Date | null = null,
   briefHourValue = 6,
+  greetingName = "",
 ): string {
   const zone = timeZoneLabel();
   const rows = accounts
@@ -248,6 +249,16 @@ export function renderAccountsPage(
           E.164 format. A bare 10-digit US number is accepted and normalised.
           ${recipient ? "" : "Falling back to <code>CLIENT_SMS_NUMBER</code> until set."}
         </p>
+      </form>
+
+      <form method="post" action="/settings" style="margin-top:1.4rem">
+        <label for="greeting">Addressed to</label>
+        <div class="row">
+          <input id="greeting" name="brief_greeting_name" type="text"
+                 value="${escapeHtml(greetingName)}" placeholder="Payeman" autocomplete="off">
+          <button type="submit">Save</button>
+        </div>
+        <p class="hint">Opens the message: "Good morning, ${escapeHtml(greetingName || "…")}". Leave blank for just "Good morning".</p>
       </form>
 
       <form method="post" action="/settings" style="margin-top:1.4rem">

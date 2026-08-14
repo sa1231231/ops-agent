@@ -55,6 +55,36 @@ export async function sendSms(body: string, to?: string): Promise<string> {
   return message.sid;
 }
 
+/**
+ * Sends the operator the same brief the client just got.
+ *
+ * Env var, not a console setting: the console belongs to the client, and this
+ * is the operator watching his own product go out. He needs to see the real
+ * message — segment count, wrapping, ranking — not a preview of it.
+ *
+ * Never throws. The client's brief has already been delivered by the time this
+ * runs, and a bad operator number must not turn a successful morning into a
+ * failed one.
+ */
+export async function sendOperatorCopy(body: string, clientNumber: string): Promise<void> {
+  const operator = optionalEnv("OPERATOR_SMS_NUMBER", "").trim();
+  if (!operator) return;
+
+  // The operator is often also the test recipient during tuning; sending twice
+  // to one handset is just confusing.
+  if (operator === clientNumber) return;
+
+  try {
+    const sid = await sendSms(body, operator);
+    console.log(`[brief] operator copy sent (sid ${sid})`);
+  } catch (err) {
+    console.error(
+      "[brief] operator copy failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
 export type DeliveryChannel = "sms" | "whatsapp" | "none";
 
 /**

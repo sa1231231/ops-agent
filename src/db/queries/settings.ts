@@ -12,6 +12,8 @@ export const SETTING_KEYS = {
   briefRecipient: "brief_recipient_sms",
   /** Local hour (0-23) the brief goes out. */
   briefHour: "brief_hour",
+  /** Who the greeting addresses. A setting, not a constant, so a misspelling is his to fix. */
+  briefGreetingName: "brief_greeting_name",
 } as const;
 
 export async function getSetting(key: string): Promise<string | null> {
@@ -75,6 +77,20 @@ export async function briefHour(envFallback: number): Promise<number> {
   if (raw === null) return envFallback;
   const hour = Number.parseInt(raw, 10);
   return Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : envFallback;
+}
+
+/** Greeting name, or "" for a bare "Good morning". */
+export async function briefGreetingName(): Promise<string> {
+  return (await getSetting(SETTING_KEYS.briefGreetingName)) ?? DEFAULT_GREETING_NAME;
+}
+
+export const DEFAULT_GREETING_NAME = "Payeman";
+
+/** Stripped to what fits in a greeting; the message is GSM-7 and single-line. */
+export function normalizeGreetingName(raw: string): string {
+  const name = raw.replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim();
+  if (name.length > 40) throw new Error("That name is too long for a greeting.");
+  return name;
 }
 
 export function normalizeHour(raw: string): string {

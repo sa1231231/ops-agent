@@ -1,6 +1,5 @@
 import { Resend } from "resend";
-import { optionalEnv, PUBLIC_BASE_URL } from "../config.js";
-import { formatLocalDateTime } from "../time.js";
+import { optionalEnv } from "../config.js";
 
 /**
  * Operator alerting.
@@ -24,25 +23,29 @@ export interface OperatorAlert {
   body: string;
 }
 
+/** The operator. Single-user system; this is not worth a settings row. */
+const OPERATOR_NAME = "Sam";
+
 /**
- * Plain, specific, and free of urgency bait.
+ * A short note from a person, near enough.
  *
- * Filters treat bracketed tags and words like "URGENT" as promotional markers,
- * and a two-line body with no context looks like a blast. A real signature and a
- * working link to a real destination both read as legitimate mail.
+ * Plain and free of urgency bait: filters treat bracketed tags and words like
+ * "URGENT" as promotional markers. Greeting, the problem, the detail, a
+ * signature — nothing else. The timestamp and console link that used to sit at
+ * the bottom said nothing the mail client and the link in his bookmarks did not
+ * already tell him.
  */
 function composeEmail(alert: OperatorAlert): { subject: string; text: string } {
   return {
     subject: `ops-agent: ${alert.subject}`,
     text: [
+      `Hi ${OPERATOR_NAME},`,
+      "",
+      "There was an error.",
+      "",
       alert.body,
       "",
-      `Time: ${formatLocalDateTime(new Date())}`,
-      `Console: ${PUBLIC_BASE_URL}`,
-      "",
-      "--",
-      "ops-agent, your personal operations agent.",
-      "This is an automated notice from software you run yourself.",
+      "-ops-agent",
     ].join("\n"),
   };
 }
