@@ -7,6 +7,7 @@ import {
 } from "../db/queries/accounts.js";
 import { upsertEvents, pruneEventsOutsideWindow } from "../db/queries/events.js";
 import {
+  deleteMessages,
   insertMessages,
   recomputeCorrespondents,
   recomputeThreads,
@@ -68,6 +69,7 @@ async function syncGmail(account: Account, token: string): Promise<string | null
     const cursorBefore = await fetchProfileHistoryId(token);
 
     let messages;
+    let reclassified: string[] = [];
     if (!account.gmail_history_id) {
       messages = await fetchColdStartInbox(token);
       historyId = cursorBefore;
@@ -82,12 +84,19 @@ async function syncGmail(account: Account, token: string): Promise<string | null
         historyId = cursorBefore;
       } else {
         messages = incremental.messages;
+        reclassified = incremental.excludedIds;
         historyId = incremental.newHistoryId ?? cursorBefore;
       }
     }
 
     const written = await insertMessages(account.id, messages);
-    return { result: null, counts: { fetched: messages.length, written } };
+    // He moved these out of the inbox. Deleting is what makes the exclusion
+    // symmetric — Google classifies, he overrules, and both directions stick.
+    const removed = await deleteMessages(account.id, reclassified);
+    if (removed > 0) {
+      console.log(`[sync] ${account.email}: removed ${removed} reclassified message(s)`);
+    }
+    return { result: null, counts: { fetched: messages.length, written, removed } };
   });
 
   // The sender graph only needs building once; after cold start the ordinary

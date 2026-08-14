@@ -216,11 +216,23 @@ async function fetchMetadata(
   return googleFetch<RawMessage>(`${BASE}/messages/${id}?${params}`, accessToken);
 }
 
-async function fetchMany(
+/**
+ * Fetched messages, split by whether they belong in the brief's world.
+ *
+ * `excluded` is not waste. On the incremental path it is the only way to learn
+ * that something already stored has been reclassified — the message is still
+ * there, it just is not ours any more.
+ */
+interface PartitionedFetch {
+  messages: NormalizedMessage[];
+  excludedIds: string[];
+}
+
+async function fetchManyPartitioned(
   accessToken: string,
   ids: string[],
   { excludeCategories = true }: { excludeCategories?: boolean } = {},
-): Promise<NormalizedMessage[]> {
+): Promise<PartitionedFetch> {
   const raw = await mapWithConcurrency(ids, CONCURRENCY, (id) =>
     fetchMetadata(accessToken, id).catch((err: unknown) => {
       // A single message can vanish between list and get (deleted mid-sync).
@@ -241,7 +253,21 @@ async function fetchMany(
     ? [...ALWAYS_EXCLUDED, ...EXCLUDED_CATEGORIES]
     : ALWAYS_EXCLUDED;
 
-  return messages.filter((m) => !hasAny(m, excluded));
+  const kept: NormalizedMessage[] = [];
+  const excludedIds: string[] = [];
+  for (const m of messages) {
+    if (hasAny(m, excluded)) excludedIds.push(m.gmailMessageId);
+    else kept.push(m);
+  }
+  return { messages: kept, excludedIds };
+}
+
+async function fetchMany(
+  accessToken: string,
+  ids: string[],
+  options: { excludeCategories?: boolean } = {},
+): Promise<NormalizedMessage[]> {
+  return (await fetchManyPartitioned(accessToken, ids, options)).messages;
 }
 
 /**
@@ -316,10 +342,29 @@ interface HistoryResponse {
  * every other bit of mailbox fiddling, and refetching on all of it would spend
  * API calls on nothing.
  */
-const RECONSIDER_ON_LABEL = new Set(["CATEGORY_PERSONAL", "IMPORTANT", "INBOX"]);
+const RECONSIDER_ON_LABEL = new Set([
+  // Moved *into* the inbox — reconsider it.
+  "CATEGORY_PERSONAL",
+  "IMPORTANT",
+  "INBOX",
+  // Moved *out* of it. Refetching these looks pointless, since the category
+  // filter will drop them again — but that is exactly the point: the filter
+  // reporting them as excluded is how sync learns to delete what it already
+  // stored. Without this, a message he files away keeps briefing him forever.
+  "CATEGORY_PROMOTIONS",
+  "CATEGORY_SOCIAL",
+  "SPAM",
+  "TRASH",
+]);
 
 export interface IncrementalResult {
   messages: NormalizedMessage[];
+  /**
+   * Messages that are no longer ours — he moved them to Promotions, Social,
+   * Spam or Trash. The caller deletes these, so filing something away actually
+   * removes it from the brief instead of leaving a stale row behind.
+   */
+  excludedIds: string[];
   newHistoryId: string | null;
   /** True when the cursor aged out and the caller must fall back. */
   expired: boolean;
@@ -371,16 +416,13 @@ export async function fetchIncremental(
     } while (pageToken);
   } catch (err) {
     if (err instanceof GoogleApiError && err.isNotFound) {
-      return { messages: [], newHistoryId: null, expired: true };
+      return { messages: [], excludedIds: [], newHistoryId: null, expired: true };
     }
     throw err;
   }
 
-  return {
-    messages: await fetchMany(accessToken, [...ids]),
-    newHistoryId,
-    expired: false,
-  };
+  const { messages, excludedIds } = await fetchManyPartitioned(accessToken, [...ids]);
+  return { messages, excludedIds, newHistoryId, expired: false };
 }
 
 /** Bounded recovery when the history cursor expires. Never widens to a full scan. */

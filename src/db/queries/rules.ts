@@ -11,12 +11,7 @@ import * as W from "../../signals/weights.js";
  * tuning change gets checked against every judgement already made.
  */
 
-export type Verdict =
-  | "good"
-  | "not-important"
-  | "wrong-rank"
-  | "badly-written"
-  | "missed";
+export type Verdict = "good" | "not-important" | "badly-written" | "missed";
 
 export interface FeedbackInput {
   briefId: number | null;

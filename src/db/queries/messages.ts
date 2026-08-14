@@ -78,6 +78,30 @@ export async function insertMessages(
  * than inferred at brief time. That is what makes "unanswered for six days" a
  * stored fact that survives a Gmail outage at 6:29am.
  */
+/**
+ * Removes messages he has reclassified out of the inbox.
+ *
+ * The counterpart to excluding Promotions and Social at fetch time. Google
+ * decides first, he overrules Google, and that has to work in both directions —
+ * otherwise something he files away keeps briefing him forever off a row nobody
+ * will ever refresh.
+ *
+ * Threads are recomputed from messages after every sync, so removing the rows
+ * is enough; nothing else needs unwinding.
+ */
+export async function deleteMessages(
+  accountId: number,
+  gmailMessageIds: string[],
+): Promise<number> {
+  if (gmailMessageIds.length === 0) return 0;
+  const { rowCount } = await pool.query(
+    `delete from messages
+      where account_id = $1 and gmail_message_id = any($2::text[])`,
+    [accountId, gmailMessageIds],
+  );
+  return rowCount ?? 0;
+}
+
 export async function recomputeThreads(accountId: number): Promise<number> {
   const { rowCount } = await pool.query(
     `insert into threads (

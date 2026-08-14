@@ -9,8 +9,9 @@ import type { Verdict } from "../db/queries/rules.js";
  * the gesture, decides which layer receives the rule.
  *
  * Every label describes *his* experience, never the mechanism. He should never
- * have to think in points, and he should never have to work out what a label
- * means: "right item, wrong position" was rewritten because it read as jargon.
+ * have to think in points, and never have to decode a label — an earlier
+ * "right item, wrong position" read as jargon and has since been dropped
+ * entirely.
  */
 
 export interface FeedbackChoice {
@@ -52,24 +53,16 @@ export const NOT_IMPORTANT_CHOICES: readonly FeedbackChoice[] = [
 /**
  * Right item, wrong presentation.
  *
- * Kept separate from the demotions because none of these mean "this should not
- * have been in the brief" — they mean it belonged there and something about how
- * it was shown was off. Sending them to a sender rule would suppress mail he
- * actually wants.
+ * Kept separate from the demotions because it does not mean "this should not
+ * have been in the brief" — it means it belonged there and the wording was off.
+ * Sending it to a sender rule would suppress mail he actually wants.
+ *
+ * There is deliberately no "wrong position" option. Ordering within the section
+ * does not matter to him: what matters is whether something is in the brief at
+ * all. Collecting rank complaints would have produced a pile of verdicts nobody
+ * intended to act on, which is worse than not asking.
  */
 export const PRESENTATION_CHOICES: readonly FeedbackChoice[] = [
-  {
-    id: "rank-too-high",
-    label: "Belonged in the brief, but not this near the top",
-    effect: "Recorded; shows up in suggestions once there's a pattern",
-    verdict: "wrong-rank",
-  },
-  {
-    id: "rank-too-low",
-    label: "Belonged higher up — I nearly missed it",
-    effect: "Recorded; shows up in suggestions once there's a pattern",
-    verdict: "wrong-rank",
-  },
   {
     id: "badly-written",
     label: "The one-line summary was wrong or confusing",

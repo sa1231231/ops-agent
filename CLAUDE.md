@@ -144,7 +144,13 @@ Runs hourly, all day, from the scheduler in the web process.
 
 Enforced in two places, and both are required. The query fragment covers the list-based paths; a label filter covers `history.list`, which accepts no query and would otherwise leak promotions back in on every incremental sync after cold start. Category exclusion is **inbound-only** — dropping a sent message because Gmail tagged its thread Promotions would quietly weaken the correspondent graph.
 
-Google has spent far more on that categoriser than this system ever will, and the human override is the escape hatch: **a message he drags into the inbox comes back into scope.** That is why `history.list` subscribes to `labelAdded` as well as `messageAdded` — moving a message out of Promotions *adds* `CATEGORY_PERSONAL`, and watching only for new messages meant a reclassified one was dropped at arrival and never reconsidered. The filter still runs afterwards, so anything genuinely still in Promotions is dropped again.
+Google has spent far more on that categoriser than this system ever will, so it decides first — and the human overrules it. **That override has to work in both directions, and does:**
+
+`history.list` subscribes to `labelAdded` as well as `messageAdded`, watching for movement each way. Moving a message *into* the inbox adds `CATEGORY_PERSONAL`; moving one *out* adds `CATEGORY_PROMOTIONS`, `CATEGORY_SOCIAL`, `SPAM` or `TRASH`. Both trigger a refetch.
+
+Refetching something that will just be filtered again looks pointless, and is the whole mechanism: `fetchManyPartitioned` returns the excluded ids rather than discarding them, and sync **deletes** those rows. Without it, a message he files away keeps briefing him forever off a row nothing would ever refresh. Threads are recomputed from messages every sync, so deleting the rows is enough — nothing else needs unwinding.
+
+The trigger set is deliberately narrow: `labelsAdded` also fires for stars and user labels, and refetching on all of it would spend API calls on nothing.
 
 Remaining tradeoff: if Gmail miscategorises something and he never notices it in the Promotions tab, scoring cannot rescue a message that was never fetched.
 
@@ -226,9 +232,9 @@ A thumbs-down is not itself a layer; it is the input. The multiple-choice answer
 | "Nothing from this company matters" | `sender_rules` (domain) | Demotes the whole domain |
 | "Already handled — call, text, in person" | `thread_rules` (mute) | Silences one thread for 30 days |
 | "I was only Cc'd" | `feedback` only | Accumulates toward a weight suggestion |
-| "Belonged in the brief, but not this near the top" | `feedback` only | Accumulates toward a suggestion |
-| "Belonged higher up — I nearly missed it" | `feedback` only | Accumulates toward a suggestion |
 | "The one-line summary was wrong or confusing" | `feedback` only | Recorded; fix with a standing instruction |
+
+**There is deliberately no "wrong position" option.** Ordering inside the section does not matter — what matters is whether something is in the brief at all. Collecting rank complaints would have produced a pile of verdicts nobody intended to act on, which is worse than not asking.
 
 **Priorities carry their own controls, with their own options.** Everything under "needs attention" is a real thread with a score behind it, so a verdict there can become arithmetic. A priority is a sentence the model wrote — no sender rule can demote it. Priority feedback feeds standing instructions and the suggestions query only, and the labels say so rather than implying an effect that cannot exist.
 

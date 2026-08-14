@@ -379,8 +379,6 @@ async function handleFeedbackPost(
       break;
 
     case "cc-noise":
-    case "rank-too-high":
-    case "rank-too-low":
     case "badly-written":
       // Recorded only. These accumulate into the suggestions query rather than
       // changing scoring on one opinion — a single verdict is not evidence that
