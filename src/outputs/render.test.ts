@@ -127,10 +127,16 @@ describe("the rendered message", () => {
     assert.ok(render({ greetingName: "" }).startsWith("Good morning\n"));
   });
 
-  it("puts a blank line between priorities but not between replies", () => {
+  it("puts a blank line between every numbered item, in both sections", () => {
     const text = render();
     assert.match(text, /1\. Send the cause statement\n\n2\. Fix the worker/);
-    assert.match(text, /1\. Hetzner needs a cause statement\n2\. Dubravka/);
+    assert.match(text, /1\. Hetzner needs a cause statement\n\n2\. Dubravka/);
+  });
+
+  it("never leaves more than one blank line anywhere", () => {
+    // The section separators and the per-item blanks butt against each other;
+    // the collapse is what stops that showing up as a gap.
+    assert.doesNotMatch(render(), /\n{3}/);
   });
 
   it("leaves the reasons out of the message", () => {

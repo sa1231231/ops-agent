@@ -264,6 +264,7 @@ PRIORITIES
 
 NEEDS A REPLY
 1. <who and what they want>
+
 2. ...
 
 <brief url>
@@ -277,7 +278,7 @@ Schedule first because it is fixed and time-bound; priorities next because they 
 
 **Only real double-bookings reach the message.** `findConflicts` still detects back-to-backs and the model still sees them, but they are filtered out of `conflictLines()` — his standups butt against each other every morning, so a "no gap" line fired daily and taught him to skip the section. Overlaps are grouped into clusters rather than listed pairwise, because a triple booking produces three pairs and three lines describing one problem reads as three problems.
 
-**Priorities get a blank line between them**; replies do not. Priorities wrap; without separation three wrapped items read as one paragraph. Reply lines are short enough not to need it.
+**Every numbered item gets a blank line after it**, in both sections. They wrap on a phone, and without the separation a run of wrapped items reads as one paragraph — the thing this layout exists to avoid. `renderPlainText` collapses `\n{3,}` to `\n\n`, so the per-item blanks and the section separators never compound into a gap.
 
 **Reply reasons are composed and stored but not sent.** Carry-over, the brief page, and the history all use `reason`; in the message it restated what the line above already said ("unanswered 4 days, deadline today" under a line that mentions the deadline). Measured: 6 segments.
 

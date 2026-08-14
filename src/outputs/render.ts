@@ -157,10 +157,11 @@ export function renderPlainText(
   }
   lines.push("");
 
+  // Both numbered sections get a blank line after every item. They wrap on a
+  // phone, and without the separation a run of wrapped items reads as one
+  // paragraph — which is the whole thing this layout exists to avoid.
   if (brief.priorities.length > 0) {
     lines.push("PRIORITIES");
-    // Blank line after each: priorities run long enough to wrap, and without the
-    // separation three wrapped items read as one paragraph.
     brief.priorities.forEach((p, i) => {
       lines.push(`${i + 1}. ${p}`);
       lines.push("");
@@ -174,8 +175,8 @@ export function renderPlainText(
     // 4 days, deadline today" restated what the line above already said.
     brief.emails.forEach((e, i) => {
       lines.push(`${i + 1}. ${e.line}`);
+      lines.push("");
     });
-    lines.push("");
   }
 
   if (opts.skippedAccounts.length > 0) {
