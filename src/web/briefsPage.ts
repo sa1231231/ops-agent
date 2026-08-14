@@ -1,11 +1,16 @@
 import { BRIEF_RETENTION_DAYS } from "../config.js";
 import type { BriefSummary } from "../db/queries/briefs.js";
+import type { MissedThread, OutcomeStats } from "../db/queries/rules.js";
 import type { ScoredThread } from "../signals/score.js";
 import { formatLocalTime } from "../time.js";
 import { escapeHtml } from "./admin.js";
 import type { LegacyComposed } from "./briefPage.js";
 import { renderScoringSection, SCORING_STYLE } from "./scoringPage.js";
-import { NOT_IMPORTANT_CHOICES, OTHER_CHOICES } from "./feedback.js";
+import {
+  NOT_IMPORTANT_CHOICES,
+  PRESENTATION_CHOICES,
+  PRIORITY_CHOICES,
+} from "./feedback.js";
 
 /**
  * Briefs: what was sent, and why it was chosen.
@@ -105,6 +110,18 @@ const STYLE = `
     padding-top: 2.25rem;
     border-top: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
   }
+  .stats { display: flex; flex-wrap: wrap; gap: 1.75rem; }
+  .stat { min-width: 5rem; }
+  .statnum { font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .stat.alert .statnum { color: #b45309; }
+  @media (prefers-color-scheme: dark) { .stat.alert .statnum { color: #fbbf24; } }
+  .statlab { font-size: .74rem; opacity: .55; margin-top: .1rem; }
+  .missedrow {
+    display: flex; align-items: center; gap: 1rem; padding: .6rem 0;
+    border-top: 1px solid color-mix(in srgb, CanvasText 10%, transparent);
+  }
+  .missedrow > div:first-child { flex: 1; min-width: 0; }
+  .missedrow form { margin: 0; }
   .fb { display: flex; align-items: center; gap: .5rem; margin: .3rem 0 .8rem; }
   .fb form.inline { margin: 0; }
   .fbgood, .fbwrap > summary {
@@ -158,7 +175,41 @@ function feedbackControls(briefId: number, threadKey: string): string {
       <details class="fbwrap">
         <summary>Not right</summary>
         <form method="post" action="/feedback">${hidden}
-          ${[...NOT_IMPORTANT_CHOICES, ...OTHER_CHOICES].map(option).join("")}
+          ${[...NOT_IMPORTANT_CHOICES, ...PRESENTATION_CHOICES].map(option).join("")}
+        </form>
+      </details>
+    </div>`;
+}
+
+/**
+ * Priorities are judged differently because they are not scored objects.
+ *
+ * Everything under "needs attention" is a real thread with a score behind it, so
+ * a verdict can become arithmetic. A priority is a sentence the model wrote —
+ * no sender rule can demote it. These feed standing instructions and the
+ * suggestions query, and the labels say so rather than implying a scoring
+ * effect that cannot exist.
+ */
+function priorityControls(briefId: number, index: number, text: string): string {
+  const hidden = `
+    <input type="hidden" name="brief_id" value="${briefId}">
+    <input type="hidden" name="priority_index" value="${index}">
+    <input type="hidden" name="note" value="${escapeHtml(text)}">`;
+
+  return `
+    <div class="fb">
+      <form class="inline" method="post" action="/feedback">${hidden}
+        <button type="submit" name="choice" value="priority-good" class="fbgood">Good call</button>
+      </form>
+      <details class="fbwrap">
+        <summary>Not right</summary>
+        <form method="post" action="/feedback">${hidden}
+          ${PRIORITY_CHOICES.map(
+            (c) => `
+            <button type="submit" name="choice" value="${c.id}" class="fbopt">
+              ${escapeHtml(c.label)}<span class="fbeffect">${escapeHtml(c.effect)}</span>
+            </button>`,
+          ).join("")}
         </form>
       </details>
     </div>`;
@@ -193,7 +244,12 @@ function renderCard(brief: BriefSummary): string {
       ${
         c.priorities.length
           ? `<div class="label">Priorities</div>
-             <ol>${c.priorities.map((p) => `<li>${escapeHtml(p)}</li>`).join("")}</ol>`
+             <ol>${c.priorities
+               .map(
+                 (p, i) =>
+                   `<li>${escapeHtml(p)}${priorityControls(brief.id, i + 1, p)}</li>`,
+               )
+               .join("")}</ol>`
           : ""
       }
       ${
@@ -235,11 +291,85 @@ function renderCard(brief: BriefSummary): string {
     </article>`;
 }
 
+/**
+ * How it is doing, judged by what he actually did.
+ *
+ * His own outbox grades the brief for free. The bottom half is the important
+ * half: he will never report the email he was not shown, because he does not
+ * know it exists, so a thread he answered that no brief mentioned is the only
+ * false negative the system can find by itself.
+ *
+ * Replying is not the same as mattering — he fires off one-liners and sits on
+ * hard things — so this directs attention and never touches scoring.
+ */
+function outcomePanel(stats: OutcomeStats, missed: MissedThread[]): string {
+  const rate =
+    stats.surfaced > 0
+      ? `${Math.round((stats.surfacedAndReplied / stats.surfaced) * 100)}%`
+      : "—";
+
+  return `
+    <div class="block">
+      <h2 class="section">How it is doing</h2>
+      <p class="section-sub">
+        Last ${stats.windowDays} days, from his own replies. Nothing here changes
+        scoring on its own.
+      </p>
+      <div class="stats">
+        <div class="stat">
+          <div class="statnum">${stats.surfaced}</div>
+          <div class="statlab">surfaced</div>
+        </div>
+        <div class="stat">
+          <div class="statnum">${stats.surfacedAndReplied}</div>
+          <div class="statlab">he replied to</div>
+        </div>
+        <div class="stat">
+          <div class="statnum">${rate}</div>
+          <div class="statlab">acted on</div>
+        </div>
+        <div class="stat ${missed.length ? "alert" : ""}">
+          <div class="statnum">${missed.length}</div>
+          <div class="statlab">answered but never shown</div>
+        </div>
+      </div>
+      ${
+        missed.length === 0
+          ? `<p class="section-sub" style="margin-top:1rem">
+               Nothing he answered was missed by the brief in this window.
+             </p>`
+          : `<p class="section-sub" style="margin-top:1rem">
+               He answered these and no brief mentioned them. Worth a look —
+               though a quick reply does not always mean it mattered.
+             </p>
+             ${missed
+               .map(
+                 (m) => `
+               <div class="missedrow">
+                 <div>
+                   <div class="ssubject">${escapeHtml(m.subject ?? "(no subject)")}</div>
+                   <div class="sfrom">${escapeHtml(m.fromEmail ?? "unknown")} &rarr; ${escapeHtml(
+                     m.accountEmail,
+                   )} &middot; replied ${escapeHtml(formatLocalTime(m.repliedAt))}</div>
+                 </div>
+                 <form class="missed" method="post" action="/feedback">
+                   <input type="hidden" name="thread_key" value="${escapeHtml(m.threadKey)}">
+                   <button type="submit" name="choice" value="missed">Should have surfaced</button>
+                 </form>
+               </div>`,
+               )
+               .join("")}`
+      }
+    </div>`;
+}
+
 export function renderBriefsPage(
   briefs: BriefSummary[],
   requestedPage: number,
   total: number,
   scored: ScoredThread[],
+  stats: OutcomeStats,
+  missed: MissedThread[],
 ): string {
   const lastPage = Math.max(1, Math.ceil(total / BRIEFS_PER_PAGE));
   // A hand-edited page number past the end should read as the last page rather
@@ -270,6 +400,8 @@ export function renderBriefsPage(
       <a href="/rules">Rules →</a>
     </header>
     <div class="sub"><a href="/">← Accounts</a> &nbsp;·&nbsp; What went out, what would go out right now, and what you thought of it.</div>
+
+    ${outcomePanel(stats, missed)}
 
     <div class="block">
       <h2 class="section">Ranking right now</h2>

@@ -144,7 +144,9 @@ Runs hourly, all day, from the scheduler in the web process.
 
 Enforced in two places, and both are required. The query fragment covers the list-based paths; a label filter covers `history.list`, which accepts no query and would otherwise leak promotions back in on every incremental sync after cold start. Category exclusion is **inbound-only** — dropping a sent message because Gmail tagged its thread Promotions would quietly weaken the correspondent graph.
 
-Known tradeoff: Gmail's categorizer is occasionally wrong, and a real message miscategorized as Promotions is never seen at all — scoring cannot rescue a message that was never fetched.
+Google has spent far more on that categoriser than this system ever will, and the human override is the escape hatch: **a message he drags into the inbox comes back into scope.** That is why `history.list` subscribes to `labelAdded` as well as `messageAdded` — moving a message out of Promotions *adds* `CATEGORY_PERSONAL`, and watching only for new messages meant a reclassified one was dropped at arrival and never reconsidered. The filter still runs afterwards, so anything genuinely still in Promotions is dropped again.
+
+Remaining tradeoff: if Gmail miscategorises something and he never notices it in the Promotions tab, scoring cannot rescue a message that was never fetched.
 
 **Incremental:** `users.history.list` against the stored `gmail_history_id`. On 404 (history expired, gap >~1 week), fall back to a bounded `newer_than:2d` resync and reset the cursor. **Never widen to a full scan on error.**
 
@@ -224,7 +226,11 @@ A thumbs-down is not itself a layer; it is the input. The multiple-choice answer
 | "Nothing from this company matters" | `sender_rules` (domain) | Demotes the whole domain |
 | "Already handled — call, text, in person" | `thread_rules` (mute) | Silences one thread for 30 days |
 | "I was only Cc'd" | `feedback` only | Accumulates toward a weight suggestion |
-| "Right item, wrong position / described badly" | `feedback` only | Recorded; no scoring change |
+| "Belonged in the brief, but not this near the top" | `feedback` only | Accumulates toward a suggestion |
+| "Belonged higher up — I nearly missed it" | `feedback` only | Accumulates toward a suggestion |
+| "The one-line summary was wrong or confusing" | `feedback` only | Recorded; fix with a standing instruction |
+
+**Priorities carry their own controls, with their own options.** Everything under "needs attention" is a real thread with a score behind it, so a verdict there can become arithmetic. A priority is a sentence the model wrote — no sender rule can demote it. Priority feedback feeds standing instructions and the suggestions query only, and the labels say so rather than implying an effect that cannot exist.
 
 "This sender is noise" and "this conversation is finished" are different claims with different lifespans, which is why a bare thumbs-down that could mean either is unactionable.
 
@@ -265,7 +271,11 @@ It proposes; a human decides; the result is a number in `weights.ts`. **Nothing 
 False negatives are the failure mode that kills trust and they are invisible — he will never report the email he was not shown, because he does not know it exists. Two paths:
 
 1. **The below-floor list on `/briefs`** carries a "this should have surfaced" button. It is the only manual way to catch a miss, and the reason that list stays visible.
-2. **Reply-outcome tracking** *(not built yet)* — the next sync reveals which threads he replied to. Surfaced-and-replied is a good call; **not-surfaced-and-replied is a miss the system can detect on its own**, with zero effort from him. Highest-value thing still on the list.
+2. **Reply-outcome tracking** — the panel at the top of `/briefs`. We are read-only, but these mailboxes get resynced anyway, so his own outbox grades the brief for free: surfaced-and-replied is a good call, and **not-surfaced-and-replied is a false negative the system finds by itself**, with zero effort from him.
+
+   **It directs attention and never touches scoring.** Replying is not the same as mattering — he fires off one-liners and sits on hard things — so it says where to look and he still decides. Threads already judged are excluded, so the list does not ask twice.
+
+   First run against live data found one: a Hetzner abuse thread scoring −14 that he had replied to.
 
 ### How drift is prevented
 

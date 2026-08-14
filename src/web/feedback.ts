@@ -3,13 +3,14 @@ import type { Verdict } from "../db/queries/rules.js";
 /**
  * The multiple-choice vocabulary.
  *
- * One gesture, four destinations. "This sender is noise" and "this conversation
- * is finished" are different claims with different lifespans, and a single
- * thumbs-down that could mean either is unactionable — so the choice, not the
- * gesture, is what decides which layer receives the rule.
+ * One gesture, several destinations. "This sender is noise" and "this
+ * conversation is finished" are different claims with different lifespans, and a
+ * bare thumbs-down that could mean either is unactionable — so the choice, not
+ * the gesture, decides which layer receives the rule.
  *
- * Wording is deliberately about *his* experience, not about scoring. He should
- * never have to think in points; the system translates.
+ * Every label describes *his* experience, never the mechanism. He should never
+ * have to think in points, and he should never have to work out what a label
+ * means: "right item, wrong position" was rewritten because it read as jargon.
  */
 
 export interface FeedbackChoice {
@@ -24,52 +25,102 @@ export interface FeedbackChoice {
 export const NOT_IMPORTANT_CHOICES: readonly FeedbackChoice[] = [
   {
     id: "sender-noise",
-    label: "This sender rarely matters",
-    effect: "Demotes this address everywhere",
+    label: "This person or service rarely matters",
+    effect: "Ranks this sender lower from now on",
     verdict: "not-important",
   },
   {
     id: "domain-noise",
     label: "Nothing from this company matters",
-    effect: "Demotes the whole domain",
+    effect: "Ranks the whole company lower",
     verdict: "not-important",
   },
   {
     id: "thread-handled",
-    label: "Already handled — call, text, in person",
-    effect: "Mutes this one thread for 30 days",
+    label: "Already dealt with — call, text, in person",
+    effect: "Hides this one conversation for 30 days",
     verdict: "not-important",
   },
   {
     id: "cc-noise",
-    label: "I was only Cc'd, this was FYI",
-    effect: "Counts toward weakening the Cc signal",
+    label: "I was only copied in, it was FYI",
+    effect: "Counts toward ranking Cc-only mail lower",
     verdict: "not-important",
   },
 ] as const;
 
-export const OTHER_CHOICES: readonly FeedbackChoice[] = [
+/**
+ * Right item, wrong presentation.
+ *
+ * Kept separate from the demotions because none of these mean "this should not
+ * have been in the brief" — they mean it belonged there and something about how
+ * it was shown was off. Sending them to a sender rule would suppress mail he
+ * actually wants.
+ */
+export const PRESENTATION_CHOICES: readonly FeedbackChoice[] = [
   {
-    id: "wrong-rank",
-    label: "Right item, wrong position",
-    effect: "Recorded for rank tuning; changes nothing yet",
+    id: "rank-too-high",
+    label: "Belonged in the brief, but not this near the top",
+    effect: "Recorded; shows up in suggestions once there's a pattern",
+    verdict: "wrong-rank",
+  },
+  {
+    id: "rank-too-low",
+    label: "Belonged higher up — I nearly missed it",
+    effect: "Recorded; shows up in suggestions once there's a pattern",
     verdict: "wrong-rank",
   },
   {
     id: "badly-written",
-    label: "Right item, described badly",
-    effect: "Recorded; fix with a standing instruction",
+    label: "The one-line summary was wrong or confusing",
+    effect: "Recorded; fix it with a standing instruction",
     verdict: "badly-written",
   },
 ] as const;
 
 export const ALL_CHOICES: readonly FeedbackChoice[] = [
   ...NOT_IMPORTANT_CHOICES,
-  ...OTHER_CHOICES,
+  ...PRESENTATION_CHOICES,
 ];
 
 export function choiceById(id: string): FeedbackChoice | null {
   return ALL_CHOICES.find((c) => c.id === id) ?? null;
+}
+
+/**
+ * Priorities are judged differently, because they are not scored objects.
+ *
+ * Everything in "needs attention" is a real thread with a score behind it, so a
+ * verdict can become arithmetic. A priority is a sentence the model wrote — no
+ * rule can demote it. These feed standing instructions and the suggestions
+ * query, and nothing else. Saying so is better than implying a scoring effect
+ * that cannot exist.
+ */
+export const PRIORITY_CHOICES: readonly { id: string; label: string; effect: string }[] = [
+  {
+    id: "priority-not-mine",
+    label: "Not actually a priority for me today",
+    effect: "Recorded against the priorities prompt",
+  },
+  {
+    id: "priority-vague",
+    label: "Too vague to act on",
+    effect: "Recorded against the priorities prompt",
+  },
+  {
+    id: "priority-obvious",
+    label: "Obvious — I did not need telling",
+    effect: "Recorded against the priorities prompt",
+  },
+  {
+    id: "priority-missing",
+    label: "Something more important was left out",
+    effect: "Recorded against the priorities prompt",
+  },
+] as const;
+
+export function isPriorityChoice(id: string): boolean {
+  return id === "priority-good" || PRIORITY_CHOICES.some((c) => c.id === id);
 }
 
 /** How long a "handled elsewhere" mute lasts before the thread can return. */

@@ -295,10 +295,28 @@ export async function fetchProfileHistoryId(
 }
 
 interface HistoryResponse {
-  history?: Array<{ messagesAdded?: Array<{ message: { id: string } }> }>;
+  history?: Array<{
+    messagesAdded?: Array<{ message: { id: string } }>;
+    labelsAdded?: Array<{ message: { id: string }; labelIds?: string[] }>;
+  }>;
   nextPageToken?: string;
   historyId?: string;
 }
+
+/**
+ * Labels whose arrival means "look at this message again".
+ *
+ * Dragging a message out of Promotions into the inbox *adds* CATEGORY_PERSONAL.
+ * Without watching for that, a message we dropped at arrival is never
+ * reconsidered — which would break the escape hatch that justifies excluding
+ * those tabs at fetch time in the first place. Gmail's categoriser is trusted
+ * precisely *because* the human can overrule it.
+ *
+ * Deliberately narrow: `labelsAdded` also fires for stars, user labels and
+ * every other bit of mailbox fiddling, and refetching on all of it would spend
+ * API calls on nothing.
+ */
+const RECONSIDER_ON_LABEL = new Set(["CATEGORY_PERSONAL", "IMPORTANT", "INBOX"]);
 
 export interface IncrementalResult {
   messages: NormalizedMessage[];
@@ -323,10 +341,11 @@ export async function fetchIncremental(
 
   try {
     do {
-      const params = new URLSearchParams({
-        startHistoryId,
-        historyTypes: "messageAdded",
-      });
+      const params = new URLSearchParams({ startHistoryId });
+      // Repeated, not comma-joined: the API takes historyTypes as a multi-value
+      // parameter and silently ignores a comma-separated string.
+      params.append("historyTypes", "messageAdded");
+      params.append("historyTypes", "labelAdded");
       if (pageToken) params.set("pageToken", pageToken);
 
       const page = await googleFetch<HistoryResponse>(
@@ -336,6 +355,15 @@ export async function fetchIncremental(
 
       for (const entry of page.history ?? []) {
         for (const added of entry.messagesAdded ?? []) ids.add(added.message.id);
+
+        // Re-fetch anything he moved into the inbox. The category filter still
+        // applies afterwards, so a message that is genuinely still Promotions
+        // is dropped again — this only reopens the ones he reclassified.
+        for (const labelled of entry.labelsAdded ?? []) {
+          if ((labelled.labelIds ?? []).some((id) => RECONSIDER_ON_LABEL.has(id))) {
+            ids.add(labelled.message.id);
+          }
+        }
       }
 
       newHistoryId = page.historyId ?? newHistoryId;

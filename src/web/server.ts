@@ -37,6 +37,8 @@ import {
   deleteThreadRule,
   listSenderRules,
   listThreadRules,
+  missedThreads,
+  outcomeStats,
   recordFeedback,
   setThreadRule,
   upsertSenderRule,
@@ -45,7 +47,12 @@ import {
 } from "../db/queries/rules.js";
 import { renderAccountsPage, type AdminNotice } from "./admin.js";
 import { renderRulesPage } from "./rulesPage.js";
-import { choiceById, MUTE_DAYS, PROPOSED_ADJUSTMENT } from "./feedback.js";
+import {
+  choiceById,
+  isPriorityChoice,
+  MUTE_DAYS,
+  PROPOSED_ADJUSTMENT,
+} from "./feedback.js";
 import { jobState, startJob } from "./jobs.js";
 import { renderBriefPage, type BriefPayload } from "./briefPage.js";
 import { BRIEFS_PER_PAGE, renderBriefsPage } from "./briefsPage.js";
@@ -229,7 +236,31 @@ async function handleFeedbackPost(
   const briefIdRaw = Number.parseInt(form.get("brief_id") ?? "", 10);
   const briefId = Number.isInteger(briefIdRaw) ? briefIdRaw : null;
 
-  if (!threadKey || !choiceId) {
+  if (!choiceId) {
+    res.writeHead(303, { Location: "/briefs?error=Incomplete+feedback" });
+    res.end();
+    return;
+  }
+
+  // A priority is a sentence the model wrote, not a scored thread, so no rule
+  // can act on it. Recorded against the priorities prompt and nothing else —
+  // pretending otherwise would imply an effect that cannot exist.
+  if (isPriorityChoice(choiceId)) {
+    await recordFeedback({
+      briefId,
+      threadKey: null,
+      verdict: choiceId === "priority-good" ? "good" : "badly-written",
+      choice: choiceId,
+      note: `priority ${form.get("priority_index") ?? "?"}: ${(form.get("note") ?? "").slice(0, 300)}`,
+    });
+    res.writeHead(303, {
+      Location: `/briefs?saved=${encodeURIComponent("Recorded against the priorities.")}`,
+    });
+    res.end();
+    return;
+  }
+
+  if (!threadKey) {
     res.writeHead(303, { Location: "/briefs?error=Incomplete+feedback" });
     res.end();
     return;
@@ -252,6 +283,25 @@ async function handleFeedbackPost(
     );
     fromEmail = rows[0]?.from_email ?? null;
     scoreAtTime = rows[0]?.score ?? scoreAtTime;
+  }
+
+  // A miss reported from the outcome panel has no brief behind it — the whole
+  // point is that no brief ever mentioned it — so the sender comes from the
+  // thread instead.
+  if (!fromEmail) {
+    const [accountId, gmailThreadId] = [
+      Number.parseInt(threadKey.slice(0, threadKey.indexOf(":")), 10),
+      threadKey.slice(threadKey.indexOf(":") + 1),
+    ];
+    if (Number.isInteger(accountId)) {
+      const { rows } = await pool.query<{ from_email: string | null }>(
+        `select from_email from messages
+          where account_id = $1 and gmail_thread_id = $2 and direction = 'inbound'
+          order by sent_at desc nulls last limit 1`,
+        [accountId, gmailThreadId],
+      );
+      fromEmail = rows[0]?.from_email ?? null;
+    }
   }
 
   const choice = choiceById(choiceId);
@@ -329,7 +379,8 @@ async function handleFeedbackPost(
       break;
 
     case "cc-noise":
-    case "wrong-rank":
+    case "rank-too-high":
+    case "rank-too-low":
     case "badly-written":
       // Recorded only. These accumulate into the suggestions query rather than
       // changing scoring on one opinion — a single verdict is not evidence that
@@ -546,14 +597,16 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const requested = Number.parseInt(url.searchParams.get("page") ?? "1", 10);
     const page = Number.isFinite(requested) && requested > 0 ? requested : 1;
 
-    const [total, briefs, scored] = await Promise.all([
+    const [total, briefs, scored, stats, missed] = await Promise.all([
       countBriefs(),
       listBriefs(BRIEFS_PER_PAGE, (page - 1) * BRIEFS_PER_PAGE),
       scoreAllCandidates(),
+      outcomeStats(),
+      missedThreads(),
     ]);
 
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(renderBriefsPage(briefs, page, total, scored));
+    res.end(renderBriefsPage(briefs, page, total, scored, stats, missed));
     return;
   }
 

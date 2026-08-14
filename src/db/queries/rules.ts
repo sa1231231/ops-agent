@@ -378,3 +378,113 @@ export async function feedbackForReplay(): Promise<
     createdAt: r.created_at,
   }));
 }
+
+/**
+ * How the brief is doing, judged by what he actually did.
+ *
+ * We are read-only, but we resync these mailboxes anyway — so his own outbox
+ * grades us for free. Surfaced-and-replied is a good call. **Not-surfaced-and-
+ * replied is a false negative the system can detect on its own**, which matters
+ * because false negatives are otherwise invisible: he will never report the
+ * email he was not shown, because he does not know it exists.
+ *
+ * Replying is not the same as mattering — he fires off one-liners and sits on
+ * hard things. So this **directs attention and never touches scoring**. It says
+ * where to look; he still decides.
+ */
+export interface OutcomeStats {
+  surfaced: number;
+  surfacedAndReplied: number;
+  windowDays: number;
+}
+
+export interface MissedThread {
+  threadKey: string;
+  subject: string | null;
+  fromEmail: string | null;
+  accountEmail: string;
+  repliedAt: Date;
+}
+
+const OUTCOME_WINDOW_DAYS = 7;
+
+export async function outcomeStats(): Promise<OutcomeStats> {
+  const { rows } = await pool.query<{ surfaced: string; replied: string }>(
+    `with surfaced as (
+       select distinct bi.ref_key, min(b.sent_at) as first_shown
+         from brief_items bi
+         join briefs b on b.id = bi.brief_id
+        where bi.kind = 'email'
+          and b.status = 'sent'
+          and b.sent_at > now() - ($1 || ' days')::interval
+        group by bi.ref_key
+     )
+     select count(*)::text as surfaced,
+            count(*) filter (
+              where t.last_outbound_at is not null
+                and t.last_outbound_at >= s.first_shown
+            )::text as replied
+       from surfaced s
+       left join threads t
+         on t.account_id = split_part(s.ref_key, ':', 1)::bigint
+        and t.gmail_thread_id = split_part(s.ref_key, ':', 2)`,
+    [String(OUTCOME_WINDOW_DAYS)],
+  );
+
+  return {
+    surfaced: Number(rows[0]?.surfaced ?? 0),
+    surfacedAndReplied: Number(rows[0]?.replied ?? 0),
+    windowDays: OUTCOME_WINDOW_DAYS,
+  };
+}
+
+/** Threads he answered that no brief ever mentioned. */
+export async function missedThreads(limit = 10): Promise<MissedThread[]> {
+  const { rows } = await pool.query<{
+    thread_key: string;
+    subject: string | null;
+    from_email: string | null;
+    account_email: string;
+    replied_at: Date;
+  }>(
+    `select t.account_id || ':' || t.gmail_thread_id as thread_key,
+            t.subject,
+            (select m.from_email from messages m
+              where m.account_id = t.account_id
+                and m.gmail_thread_id = t.gmail_thread_id
+                and m.direction = 'inbound'
+              order by m.sent_at desc nulls last limit 1) as from_email,
+            a.email as account_email,
+            t.last_outbound_at as replied_at
+       from threads t
+       join accounts a on a.id = t.account_id
+      where a.status <> 'disabled'
+        and t.last_outbound_at > now() - ($1 || ' days')::interval
+        and t.last_inbound_at is not null
+        -- He replied to something, rather than starting the conversation.
+        and t.last_inbound_at < t.last_outbound_at
+        and not exists (
+          select 1
+            from brief_items bi
+            join briefs b on b.id = bi.brief_id
+           where bi.ref_key = t.account_id || ':' || t.gmail_thread_id
+             and b.sent_at > now() - interval '30 days'
+        )
+        -- Already judged; no point asking twice.
+        and not exists (
+          select 1 from feedback f
+           where f.thread_key = t.account_id || ':' || t.gmail_thread_id
+        )
+      order by t.last_outbound_at desc
+      limit $2`,
+    [String(OUTCOME_WINDOW_DAYS), limit],
+  );
+
+  return rows.map((r) => ({
+    threadKey: r.thread_key,
+    subject: r.subject,
+    fromEmail: r.from_email,
+    accountEmail: r.account_email,
+    repliedAt: r.replied_at,
+  }));
+}
