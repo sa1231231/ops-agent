@@ -137,7 +137,6 @@ export async function runBrief(
 
     const text = renderPlainText(composed, {
       localDate,
-      briefUrl,
       skippedAccounts: skippedEmails,
       meetings: meetingList,
       conflicts: conflictList,

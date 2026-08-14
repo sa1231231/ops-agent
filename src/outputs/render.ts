@@ -18,7 +18,6 @@ import { BRIEF_TZ } from "../time.js";
 
 export interface RenderOptions {
   localDate: string;
-  briefUrl: string;
   skippedAccounts: string[];
   /** Pre-rendered by `meetingLines()`; one meeting per entry. */
   meetings: string[];
@@ -181,11 +180,11 @@ export function renderPlainText(
 
   if (opts.skippedAccounts.length > 0) {
     lines.push(`Could not read: ${opts.skippedAccounts.join(", ")}`);
-    lines.push("");
   }
 
-  lines.push(opts.briefUrl);
-
+  // No link. The brief page is still built and still stored — the console's
+  // history links to it — but the message is meant to be complete on its own,
+  // and a URL he never taps is a segment he pays for every morning.
   return toGsm7(lines.join("\n").replace(/\n{3,}/g, "\n\n").trim());
 }
 

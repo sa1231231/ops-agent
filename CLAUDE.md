@@ -266,8 +266,6 @@ NEEDS A REPLY
 1. <who and what they want>
 
 2. ...
-
-<brief url>
 ```
 
 Schedule first because it is fixed and time-bound; priorities next because they are what he decides to do about the day; replies last because they are the backlog he works around them.
@@ -279,6 +277,8 @@ Schedule first because it is fixed and time-bound; priorities next because they 
 **Only real double-bookings reach the message.** `findConflicts` still detects back-to-backs and the model still sees them, but they are filtered out of `conflictLines()` — his standups butt against each other every morning, so a "no gap" line fired daily and taught him to skip the section. Overlaps are grouped into clusters rather than listed pairwise, because a triple booking produces three pairs and three lines describing one problem reads as three problems.
 
 **Every numbered item gets a blank line after it**, in both sections. They wrap on a phone, and without the separation a run of wrapped items reads as one paragraph — the thing this layout exists to avoid. `renderPlainText` collapses `\n{3,}` to `\n\n`, so the per-item blanks and the section separators never compound into a gap.
+
+**No link.** The brief page is still built, tokened, and stored — the console's history links to it — but the message stands on its own. A URL he never taps is a segment paid for every morning.
 
 **Reply reasons are composed and stored but not sent.** Carry-over, the brief page, and the history all use `reason`; in the message it restated what the line above already said ("unanswered 4 days, deadline today" under a line that mentions the deadline). Measured: 6 segments.
 
@@ -357,7 +357,7 @@ Server-rendered template literals, no framework, no client JS, no build step. Ba
 | `POST /settings` | Recipient, greeting name, send hour — one endpoint, three independent forms |
 | `POST /run` | Sync then brief, started in the background |
 | `POST /accounts/disconnect` | Revoke at Google, erase stored data, keep the row |
-| `GET /brief/:token` | The full brief page. **Unauthenticated by design** — he opens it on a phone at 6:30am and a password prompt defeats the purpose. The token is unguessable and expiring, and grants nothing beyond one composed brief. |
+| `GET /brief/:token` | The full brief page, reached from the history. No longer linked from the message. **Unauthenticated by design** — the token is unguessable and expiring and grants nothing beyond one composed brief, which keeps it shareable if the link ever goes back in the text. |
 | `GET /healthz` | Liveness |
 
 Each settings form posts only its own field, so saving the hour cannot wipe the recipient. Values are validated on save — a bad phone number becomes a form error now rather than a failed brief at 6am.

@@ -109,7 +109,6 @@ describe("the rendered message", () => {
   const render = (over: Partial<Parameters<typeof renderPlainText>[1]> = {}) =>
     renderPlainText(brief, {
       localDate: "2026-08-14",
-      briefUrl: "https://example.com/brief/abc",
       skippedAccounts: [],
       meetings: ["7:00 AM  Freedom Chase"],
       conflicts: [],
@@ -163,6 +162,12 @@ describe("the rendered message", () => {
 
   it("names accounts it could not read rather than staying silent", () => {
     assert.match(render({ skippedAccounts: ["ops@acme.com"] }), /Could not read: ops@acme\.com/);
+  });
+
+  it("carries no link", () => {
+    // The brief page still exists and the console still links to it; the
+    // message is meant to stand alone rather than spend a segment on a URL.
+    assert.doesNotMatch(render(), /https?:\/\//);
   });
 
   it("says so plainly when the calendar is empty", () => {
