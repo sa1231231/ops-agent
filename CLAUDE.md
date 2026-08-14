@@ -53,12 +53,18 @@ Error content is inherently variable (account names, error strings) and cannot b
 The schema is small and this keeps the toolchain trivial, in the spirit of the no-build-step constraint.
 
 **5. Sync is decoupled from delivery.**
-A worker runs hourly writing to Postgres; the brief job only reads Postgres and sends. A Gmail outage minutes before the brief cannot kill it, and thread state accumulates over days so "unanswered for six days" is a fact in the database rather than something inferred at send time.
+The hourly cycle syncs into Postgres; the brief job only reads Postgres and sends. A Gmail outage minutes before the brief cannot kill it, and thread state accumulates over days so "unanswered for six days" is a fact in the database rather than something inferred at send time.
 
 Hourly is not about completeness — the Gmail history cursor picks up everything since the last successful run, so one sync a day would capture the same messages. It is about not letting a single failed sync ship a brief built on yesterday's data, which would look entirely normal and be wrong.
 
 **6. Direct commits to `main`. No pull requests.**
 Single developer.
+
+**7. The schedule runs inside the web service, not a separate cron worker.**
+Reversal of the original two-service split, forced rather than chosen: Railway rejects every deployment of the cron worker before a build is created, with identical config to the web service that deploys fine from the same commit. See *Where the schedule actually runs*. `jobs/worker.ts` is unchanged and still runs standalone, so this is reversible with one env var.
+
+**8. The model does not write the schedule.**
+Meeting times, titles, and conflicts are rendered from calendar rows. They are facts already in Postgres with exactly one correct answer; a model restating them spends tokens and adds a way to be wrong about the only part of the brief that is not a judgement call. The model gets the schedule as context for the priorities, and is told not to restate it.
 
 ---
 
@@ -66,7 +72,7 @@ Single developer.
 
 - **Node + TypeScript** — `tsx` in dev, `tsc` for prod
 - **Postgres on Railway** — dev and prod instances both there, connection string from env. Nothing runs on the dev box except the code and Claude Code.
-- **Railway hosting** — one repo, two services: a web service and a cron worker
+- **Railway hosting** — one repo. The web service serves the console and, with `ENABLE_SCHEDULER=1`, owns the hourly cycle. A separate cron-worker service exists but has never deployed successfully (see *Where the schedule actually runs*).
 - **Anthropic API** — `claude-opus-5` for ranking and composition
 - **Twilio SMS** — delivery (WhatsApp kept behind `DELIVERY_CHANNEL`, unused)
 
@@ -83,7 +89,7 @@ src/
   ranking/    candidates.ts, compose.ts    → prefilter, then one LLM call
   outputs/    sms.ts, render.ts, whatsapp.ts, operatorEmail.ts
   web/        server.ts, admin.ts, oauth.ts, briefPage.ts, briefsPage.ts, scoringPage.ts, jobs.ts
-  jobs/       sync.ts, brief.ts, worker.ts
+  jobs/       sync.ts, brief.ts, worker.ts, scheduler.ts
 ```
 
 The `sources → signals → ranking → outputs` split is what keeps this from becoming a digest-only codebase. `signals/` scores threads with **no knowledge of "today"**; a future search capability calls the same scorer with a different candidate set.
@@ -120,7 +126,7 @@ Flow uses `access_type=offline` and `prompt=consent` (forces a refresh token on 
 
 ## Sync
 
-Runs on the cron worker every ~20 minutes, all day.
+Runs hourly, all day, from the scheduler in the web process.
 
 **Cold start, per account:**
 - Inbox: `newer_than:7d -in:chats -category:promotions -category:social`, capped ~500 messages/account. `COLD_START_DAYS = 7` is a hard constant. Never a full-inbox scan.
@@ -266,19 +272,29 @@ One meeting per line, and each reply's reason on its own indented line. Both cos
 
 There is deliberately **no one-per-day lock**. `briefs.local_date` was UNIQUE and doubled as an idempotency gate, which meant a manual test send consumed the day's slot and blocked the scheduled one — unworkable while ranking and format are being tuned.
 
-What prevents accidental repeats now: the brief only fires when the local hour matches the configured hour, and the worker runs once per hour, so the scheduler reaches the send path at most once a day. The remaining exposure is a manual run colliding with a scheduled one in the same hour, which sends twice. That is accepted for now.
+What prevents accidental repeats now: the brief only fires when the local hour matches the configured hour, the cycle runs once per hour, and a scheduled run skips if a scheduled send already exists for the local date. The remaining exposure is a manual run colliding with a scheduled one in the same hour, which sends twice. That is accepted, and is the point — manual sends are for tuning.
 
 ### The console's Run now
 
-**One button — "Sync and send brief".** It syncs every account, then composes and sends, exactly as the scheduled worker does. There is no separate sync button and no preview mode: the whole system is read-only, so nothing about firing a brief needs care, and the only thing a preview saved was an SMS segment. Splitting them mostly created a way to send a brief against stale mail.
+**One button — "Sync and send brief".** It syncs every account, then composes and sends, exactly as the scheduled cycle does. There is no separate sync button and no preview mode: the whole system is read-only, so nothing about firing a brief needs care, and the only thing a preview saved was an SMS segment. Splitting them mostly created a way to send a brief against stale mail.
 
 Sync failure inside the run is caught, not fatal — same rule as the worker. Postgres already holds days of thread state, so a Google outage degrades the brief rather than cancelling it.
 
 Job state is a single in-memory record (`web/jobs.ts`), correct for a single instance. A restart loses the last result, not the work. `DRY_RUN=1` on the CLI still exists for checking format without sending.
 
+### Where the schedule actually runs
+
+**Inside the web service.** `jobs/scheduler.ts` re-arms a `setTimeout` from the wall clock each hour (not `setInterval`, which drifts) and calls the same `runCycle()` in `jobs/worker.ts` that the standalone CLI worker calls. Enabled by `ENABLE_SCHEDULER=1`, off otherwise, so exactly one thing per deployment drives it.
+
+This is not the original design. The separate Railway cron service **fails every deployment before a build is even created** — no build logs beyond "scheduling build on Metal builder", no runtime logs, `buildLogs` returns "deployment does not have an associated build". Its config is identical to the web service (same repo, same RAILPACK builder, same commit) and the web service deploys fine from the same push. Nothing in this repo can reach that failure. A brief that fires is worth more than a tidy split of processes, and the console already ran this exact job in-process via the Run-now button.
+
+`jobs/worker.ts` still stands alone and still works — if the cron service is ever fixed, set `ENABLE_SCHEDULER=0` on the web service and it takes over unchanged.
+
+**Two schedulers cannot double-send.** Every run carries a `trigger` (`"scheduled"` or `"manual"`), stored in the brief payload. A scheduled run skips if a scheduled send already exists for the local date (`scheduledSendExists`). This is deliberately narrower than the UNIQUE constraint it replaces: manual runs stay unlimited, which is the whole reason that constraint was dropped.
+
 ### Timezone / DST
 
-Railway cron is UTC. Run the job **hourly** and gate on *"is it `BRIEF_HOUR` in `BRIEF_TZ` and is there no brief row for today"*. This survives DST without a twice-yearly hour shift.
+Cron and container clocks are UTC. The cycle runs **hourly** and gates on *"is it the configured hour in `BRIEF_TZ`"*. This survives DST without a twice-yearly hour shift. The tick fires at :00:05 rather than :00:00 — a clock a hair behind would otherwise read the previous hour and skip the day.
 
 ### Operator alerts
 
@@ -294,8 +310,10 @@ GOOGLE_CLIENT_SECRET   OAUTH_REDIRECT_URI     ADMIN_SECRET
 ANTHROPIC_API_KEY      TWILIO_ACCOUNT_SID     TWILIO_AUTH_TOKEN
 TWILIO_WHATSAPP_FROM   WHATSAPP_TEMPLATE_SID  CLIENT_WHATSAPP_NUMBER
 OPERATOR_EMAIL         RESEND_API_KEY         BRIEF_TZ
-BRIEF_HOUR             PUBLIC_BASE_URL
+BRIEF_HOUR             PUBLIC_BASE_URL        ENABLE_SCHEDULER
 ```
+
+`ENABLE_SCHEDULER=1` is set on the web service and nowhere else. `BRIEF_HOUR` and `CLIENT_SMS_NUMBER` are fallbacks only — the console settings win once saved.
 
 `.env` is gitignored. It holds the token encryption key, OAuth secrets, and the Twilio and Anthropic keys — never commit it.
 
