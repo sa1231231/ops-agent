@@ -31,7 +31,11 @@ const OUTPUT_SCHEMA = {
   properties: {
     emails: {
       type: "array",
-      description: "Emails that need him, most important first. At most 8.",
+      description:
+        "Things that need his attention today, most important first. At most 8. " +
+        "Usually an unanswered email, but also: a deadline he was given that has " +
+        "arrived, a commitment he made coming due, or a meeting today that needs " +
+        "preparation. Not everything here is a reply.",
       items: {
         type: "object",
         properties: {
@@ -42,7 +46,8 @@ const OUTPUT_SCHEMA = {
           line: {
             type: "string",
             description:
-              "One line: who it is from and what they want. Under 90 characters.",
+              "One line: what needs him and from whom. Under 90 characters. " +
+              "If a named deadline has arrived or passed, lead with that.",
           },
           reason: {
             type: "string",
@@ -82,6 +87,8 @@ Stability matters more than freshness. This runs every day, and he will notice i
 
 - Items marked ALREADY REPORTED were in an earlier brief and are still unanswered. Keep them near the position they had, and make the ageing explicit in the reason — "still open, day 3".
 - Do not re-explain a carried item as though it is new.
+
+This section is not only about replying. A deadline he was given that lands today, a commitment coming due, or a meeting he is unprepared for all belong in it. Describe what needs doing, not what kind of object it is.
 
 The three priorities should follow from the meetings and emails you were given — the things that would make today a success. They are not a summary of the above; they are what he should actually do.`;
 
@@ -131,6 +138,8 @@ function formatCandidate(t: ScoredThread, carried: CarriedItem | undefined): str
 }
 
 export interface ComposeInput {
+  /** Layer 4: house rules he wrote, injected verbatim. */
+  houseRules?: string[];
   localDate: string;
   meetings: Meeting[];
   conflicts: Conflict[];
@@ -163,7 +172,14 @@ export function buildPrompt(input: ComposeInput): string {
         .join("\n\n")
     : "(nothing needs his attention)";
 
+  const houseRules = input.houseRules?.length
+    ? `\n## Standing instructions from him\nThese override the general guidance above where they conflict.\n${input.houseRules
+        .map((r) => `- ${r}`)
+        .join("\n")}\n`
+    : "";
+
   return `Today is ${localDate} (${BRIEF_TZ}).
+${houseRules}
 
 ## Today's meetings (context only — this is rendered for him separately, do not restate it)
 ${meetingBlock}
@@ -171,8 +187,10 @@ ${meetingBlock}
 ## Scheduling conflicts detected (also rendered separately)
 ${conflictBlock}
 
-## Emails that may need him
+## Things that may need his attention
 These already passed a deterministic filter and are ordered by score. Trust the ordering unless something in the content clearly contradicts it.
+
+Most are threads waiting on a reply, but not all. Where a signal says a deadline resolves to today or is overdue, that is a date the sender actually named and it has arrived — say so plainly rather than describing the thread as merely unanswered.
 
 ${emailBlock}
 ${

@@ -29,7 +29,23 @@ import {
   setSetting,
   SETTING_KEYS,
 } from "../db/queries/settings.js";
+import {
+  activeBriefRules,
+  addBriefRule,
+  deleteBriefRule,
+  deleteSenderRule,
+  deleteThreadRule,
+  listSenderRules,
+  listThreadRules,
+  recordFeedback,
+  setThreadRule,
+  upsertSenderRule,
+  weightSuggestions,
+  type Verdict,
+} from "../db/queries/rules.js";
 import { renderAccountsPage, type AdminNotice } from "./admin.js";
+import { renderRulesPage } from "./rulesPage.js";
+import { choiceById, MUTE_DAYS, PROPOSED_ADJUSTMENT } from "./feedback.js";
 import { jobState, startJob } from "./jobs.js";
 import { renderBriefPage, type BriefPayload } from "./briefPage.js";
 import { BRIEFS_PER_PAGE, renderBriefsPage } from "./briefsPage.js";
@@ -188,6 +204,176 @@ async function handleRunPost(
   res.end();
 }
 
+
+/**
+ * A verdict becomes a rule.
+ *
+ * He picks a plain-English option; this decides which layer receives it. He
+ * never has to think in points — and every rule created here is a signed
+ * adjustment, never an exclusion, so a demoted sender can always be overruled by
+ * enough other evidence.
+ */
+async function handleFeedbackPost(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  if (!sameOrigin(req)) {
+    res.writeHead(403, { "Content-Type": "text/plain" });
+    res.end("Cross-origin form posts are refused\n");
+    return;
+  }
+
+  const form = await readFormBody(req);
+  const threadKey = (form.get("thread_key") ?? "").trim();
+  const choiceId = (form.get("choice") ?? "").trim();
+  const briefIdRaw = Number.parseInt(form.get("brief_id") ?? "", 10);
+  const briefId = Number.isInteger(briefIdRaw) ? briefIdRaw : null;
+
+  if (!threadKey || !choiceId) {
+    res.writeHead(303, { Location: "/briefs?error=Incomplete+feedback" });
+    res.end();
+    return;
+  }
+
+  // The sender and the score at the time both come from the brief's stored
+  // scoring snapshot rather than from recomputing: the mail has moved on since,
+  // and a rule should be attributed to what he actually saw.
+  let fromEmail: string | null = null;
+  let scoreAtTime: number | null = Number.parseInt(form.get("score") ?? "", 10);
+  if (!Number.isInteger(scoreAtTime)) scoreAtTime = null;
+
+  if (briefId !== null) {
+    const { rows } = await pool.query<{ from_email: string | null; score: number | null }>(
+      `select item->>'from' as from_email, (item->>'score')::int as score
+         from briefs b, jsonb_array_elements(b.payload->'scoring') item
+        where b.id = $1 and item->>'threadKey' = $2
+        limit 1`,
+      [briefId, threadKey],
+    );
+    fromEmail = rows[0]?.from_email ?? null;
+    scoreAtTime = rows[0]?.score ?? scoreAtTime;
+  }
+
+  const choice = choiceById(choiceId);
+  const verdict: Verdict =
+    choiceId === "good" ? "good" : choiceId === "missed" ? "missed" : (choice?.verdict ?? "not-important");
+
+  await recordFeedback({
+    briefId,
+    threadKey,
+    verdict,
+    choice: choiceId,
+    scoreAtTime,
+  });
+
+  let note = "Recorded.";
+
+  switch (choiceId) {
+    case "good":
+      // No rule. An approval is evidence for the suggestions query, not a
+      // reason to start promoting a sender on one data point.
+      note = "Marked as a good call.";
+      break;
+
+    case "missed":
+      if (fromEmail) {
+        await upsertSenderRule({
+          pattern: fromEmail,
+          scope: "address",
+          adjustment: PROPOSED_ADJUSTMENT.senderImportant,
+          reason: "marked as missed",
+          sourceBrief: briefId,
+        });
+        note = `Promoted ${fromEmail}. It will rank higher next time.`;
+      } else {
+        await setThreadRule({ threadKey, verdict: "pin", reason: "marked as missed" });
+        note = "Pinned that thread.";
+      }
+      break;
+
+    case "sender-noise":
+      if (fromEmail) {
+        await upsertSenderRule({
+          pattern: fromEmail,
+          scope: "address",
+          adjustment: PROPOSED_ADJUSTMENT.senderNoise,
+          reason: "marked as rarely important",
+          sourceBrief: briefId,
+        });
+        note = `Demoted ${fromEmail}.`;
+      }
+      break;
+
+    case "domain-noise":
+      if (fromEmail?.includes("@")) {
+        const domain = `@${fromEmail.slice(fromEmail.lastIndexOf("@") + 1)}`;
+        await upsertSenderRule({
+          pattern: domain,
+          scope: "domain",
+          adjustment: PROPOSED_ADJUSTMENT.domainNoise,
+          reason: "whole domain marked as noise",
+          sourceBrief: briefId,
+        });
+        note = `Demoted everything from ${domain}.`;
+      }
+      break;
+
+    case "thread-handled":
+      await setThreadRule({
+        threadKey,
+        verdict: "mute",
+        expiresAt: new Date(Date.now() + MUTE_DAYS * 86_400_000),
+        reason: "handled outside email",
+      });
+      note = `Muted that thread for ${MUTE_DAYS} days.`;
+      break;
+
+    case "cc-noise":
+    case "wrong-rank":
+    case "badly-written":
+      // Recorded only. These accumulate into the suggestions query rather than
+      // changing scoring on one opinion — a single verdict is not evidence that
+      // a global weight is wrong.
+      note = "Recorded. It will show up in suggestions once there is a pattern.";
+      break;
+  }
+
+  res.writeHead(303, { Location: `/briefs?saved=${encodeURIComponent(note)}` });
+  res.end();
+}
+
+async function handleRulesPost(
+  path: string,
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  if (!sameOrigin(req)) {
+    res.writeHead(403, { "Content-Type": "text/plain" });
+    res.end("Cross-origin form posts are refused\n");
+    return;
+  }
+
+  const form = await readFormBody(req);
+
+  if (path === "/rules/house") {
+    const rule = (form.get("rule") ?? "").replace(/\s+/g, " ").trim();
+    if (rule) await addBriefRule(rule.slice(0, 240));
+    res.writeHead(303, { Location: "/rules?saved=Added." });
+    res.end();
+    return;
+  }
+
+  const id = Number.parseInt(form.get("id") ?? "", 10);
+  const kind = form.get("kind") ?? "";
+  if (Number.isInteger(id)) {
+    if (kind === "sender") await deleteSenderRule(id);
+    else if (kind === "thread") await deleteThreadRule(id);
+    else if (kind === "house") await deleteBriefRule(id);
+  }
+  res.writeHead(303, { Location: "/rules?saved=Removed." });
+  res.end();
+}
+
 /**
  * Disconnects an account: revokes at Google, then erases everything read from
  * it. The row survives, marked disabled, so reconnecting the same address later
@@ -239,7 +425,10 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const path = url.pathname;
 
   if (req.method === "POST") {
-    const postPaths = ["/settings", "/run", "/accounts/disconnect"];
+    const postPaths = [
+      "/settings", "/run", "/accounts/disconnect",
+      "/feedback", "/rules/house", "/rules/delete",
+    ];
     if (!postPaths.includes(path)) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("Not found\n");
@@ -251,6 +440,10 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     }
     if (path === "/settings") {
       await handleSettingsPost(req, res);
+    } else if (path === "/feedback") {
+      await handleFeedbackPost(req, res);
+    } else if (path.startsWith("/rules/")) {
+      await handleRulesPost(path, req, res);
     } else if (path === "/accounts/disconnect") {
       await handleDisconnectPost(req, res);
     } else {
@@ -361,6 +554,24 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
 
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(renderBriefsPage(briefs, page, total, scored));
+    return;
+  }
+
+  if (path === "/rules") {
+    const [senders, threads, house, suggestions, counted] = await Promise.all([
+      listSenderRules(),
+      listThreadRules(),
+      activeBriefRules(),
+      weightSuggestions(),
+      pool.query<{ n: string }>("select count(*)::text as n from feedback"),
+    ]);
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(
+      renderRulesPage(
+        senders, threads, house, suggestions,
+        Number(counted.rows[0]?.n ?? 0),
+      ),
+    );
     return;
   }
 

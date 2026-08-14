@@ -9,6 +9,7 @@ import {
   saveBriefItems,
   scheduledSendExists,
 } from "../db/queries/briefs.js";
+import { activeBriefRules, recordRuleFires } from "../db/queries/rules.js";
 import { briefGreetingName, briefHour, briefRecipient } from "../db/queries/settings.js";
 import { formatSkippedAccounts, notifyOperator } from "../outputs/operatorEmail.js";
 import {
@@ -103,11 +104,12 @@ export async function runBrief(
   const brief = dryRun ? null : await createBrief(localDate);
 
   try {
-    const [meetings, candidates, carried, skipped] = await Promise.all([
+    const [meetings, candidates, carried, skipped, houseRules] = await Promise.all([
       meetingsForLocalDay(now),
       selectCandidates(now),
       carriedOverItems(localDate),
       skippedAccounts(),
+      activeBriefRules(),
     ]);
 
     const conflicts = findConflicts(meetings);
@@ -125,6 +127,7 @@ export async function runBrief(
       candidates,
       carried,
       skippedAccounts: skippedEmails,
+      houseRules: houseRules.map((r) => r.rule),
     });
 
     const briefUrl = brief
@@ -215,6 +218,11 @@ export async function runBrief(
       messageSid,
       skippedEmails,
     );
+
+    // Fire counts are bumped only on a real send. The scoring view recomputes
+    // on every page load, and counting those would make a rule look
+    // load-bearing when nobody had done anything but look at it.
+    await recordRuleFires([...new Set(candidates.flatMap((t) => t.firedSenderRuleIds))]);
 
     if (skipped.length > 0) {
       await notifyOperator(formatSkippedAccounts(skipped));

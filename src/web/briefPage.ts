@@ -132,7 +132,7 @@ export function renderBriefPage(
     </section>
 
     <section>
-      <h2>Needs a reply</h2>
+      <h2>Needs attention</h2>
       ${emails}
     </section>
 

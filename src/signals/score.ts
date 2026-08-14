@@ -1,3 +1,5 @@
+import type { Deadline } from "./deadlines.js";
+import { EMPTY_RULES, ruleSignals, type RuleSet } from "./rules.js";
 import * as W from "./weights.js";
 
 /**
@@ -36,6 +38,12 @@ export interface ThreadCandidate {
   /** From the calendar/email join. */
   meetingSoonAt: Date | null;
   metRecentlyAt: Date | null;
+
+  /**
+   * A date the message named, already resolved against a timezone. Resolved
+   * upstream so this module stays free of zone handling and stays pure.
+   */
+  deadline?: Deadline | null;
 }
 
 export interface Signal {
@@ -49,6 +57,8 @@ export interface ScoredThread {
   score: number;
   signals: Signal[];
   daysWaiting: number;
+  /** `sender_rules` that contributed, so a real send can bump their fire count. */
+  firedSenderRuleIds: number[];
 }
 
 const MS_PER_DAY = 86_400_000;
@@ -114,6 +124,7 @@ function detectAsk(candidate: ThreadCandidate): Signal | null {
 export function scoreThread(
   candidate: ThreadCandidate,
   now = new Date(),
+  rules: RuleSet = EMPTY_RULES,
 ): ScoredThread {
   const signals: Signal[] = [];
 
@@ -142,6 +153,8 @@ export function scoreThread(
   // Resolved once: a relay address changes every conversation, so the graph
   // cannot say anything about it and is skipped in both directions.
   const relay = notificationRelay(candidate.fromEmail);
+  const automatedSender = relay ? null : looksAutomated(candidate.fromEmail);
+  const machine = Boolean(relay) || candidate.isAutomated || Boolean(automatedSender);
 
   const relationship = relay ? 0 : W.correspondentScore(candidate.outboundCount);
   if (relay) {
@@ -190,6 +203,34 @@ export function scoreThread(
     });
   }
 
+  // A named date that has arrived. This is the main thing that makes the
+  // section broader than "unanswered email" — nobody has to reply for a
+  // commitment to need him today.
+  //
+  // Suppressed for machines, and that is the whole difference between this
+  // working and not. Marketing copy is built out of "today", "last chance" and
+  // "next Thursday"; against live data every single false positive here was a
+  // newsletter. Relying on the automated penalty to cancel the boost afterwards
+  // would leave it correct only by arithmetic accident.
+  if (candidate.deadline && !machine) {
+    const { state, phrase, date } = candidate.deadline;
+    const points =
+      state === "today"
+        ? W.DEADLINE_TODAY
+        : state === "overdue"
+          ? W.DEADLINE_OVERDUE
+          : state === "tomorrow"
+            ? W.DEADLINE_TOMORROW
+            : 0;
+    if (points > 0) {
+      signals.push({
+        name: `deadline-${state}`,
+        points,
+        detail: `"${phrase}" resolves to ${date}`,
+      });
+    }
+  }
+
   const ask = detectAsk(candidate);
   if (ask) signals.push(ask);
 
@@ -212,7 +253,6 @@ export function scoreThread(
       detail: `${relay} — the conversation lives in that app`,
     });
   } else {
-    const automatedSender = looksAutomated(candidate.fromEmail);
     if (candidate.isAutomated || automatedSender) {
       signals.push({
         name: "automated",
@@ -225,8 +265,26 @@ export function scoreThread(
     signals.push({ name: "bulk-mail", points: W.LIST_UNSUBSCRIBE });
   }
 
+  // Learned rules last, so the breakdown reads as "here is what the system
+  // worked out, and here is what he told it". They are ordinary signed points
+  // like everything above — never a veto.
+  const learned = ruleSignals(
+    candidate.fromEmail,
+    candidate.accountId,
+    candidate.gmailThreadId,
+    rules,
+    now,
+  );
+  signals.push(...learned.signals);
+
   const score = signals.reduce((total, s) => total + s.points, 0);
-  return { candidate, score, signals, daysWaiting };
+  return {
+    candidate,
+    score,
+    signals,
+    daysWaiting,
+    firedSenderRuleIds: learned.firedSenderRuleIds,
+  };
 }
 
 /**

@@ -220,6 +220,31 @@ export const CONVERSATION_MIN_MESSAGES = 3;
 // --- Selection --------------------------------------------------------------
 
 /** Below this, an item is not worth a line in the brief regardless of rank. */
+/**
+ * Learned thread verdicts (`thread_rules`).
+ *
+ * A mute is large but still finite, and deliberately so: "I handled this on a
+ * call" is the most common false positive in a system built on awaiting_reply,
+ * but a thread that comes roaring back deserves to be heard. Mutes also expire.
+ */
+/**
+ * A date the message actually named, resolved and now imminent.
+ *
+ * Separate from the `deadline` ask-pattern, which only matches the words. "By
+ * Friday" scores the same whether Friday is tomorrow or was three weeks ago;
+ * these fire on the day it lands. Overdue outranks tomorrow deliberately — a
+ * date he has already blown needs him more than one he still has time for.
+ */
+export const DEADLINE_TODAY = 24;
+export const DEADLINE_OVERDUE = 20;
+export const DEADLINE_TOMORROW = 12;
+
+export const THREAD_PIN = 45;
+export const THREAD_MUTE = -50;
+
+/** Ceiling on a single learned sender rule, so no rule becomes a hard filter. */
+export const SENDER_RULE_MAX = 40;
+
 export const MIN_SCORE_FOR_BRIEF = 25;
 
 /** How many survivors reach the model. Cheap, and keeps the prompt stable. */

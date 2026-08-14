@@ -5,6 +5,7 @@ import { formatLocalTime } from "../time.js";
 import { escapeHtml } from "./admin.js";
 import type { LegacyComposed } from "./briefPage.js";
 import { renderScoringSection, SCORING_STYLE } from "./scoringPage.js";
+import { NOT_IMPORTANT_CHOICES, OTHER_CHOICES } from "./feedback.js";
 
 /**
  * Briefs: what was sent, and why it was chosen.
@@ -104,10 +105,63 @@ const STYLE = `
     padding-top: 2.25rem;
     border-top: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
   }
+  .fb { display: flex; align-items: center; gap: .5rem; margin: .3rem 0 .8rem; }
+  .fb form.inline { margin: 0; }
+  .fbgood, .fbwrap > summary {
+    font: inherit; font-size: .74rem; cursor: pointer; padding: .12rem .5rem;
+    border-radius: 5px; border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+    background: none; color: inherit; opacity: .65; list-style: none;
+  }
+  .fbgood:hover, .fbwrap > summary:hover { opacity: 1; }
+  .fbwrap { display: inline-block; }
+  .fbwrap[open] > summary { opacity: 1; font-weight: 600; }
+  .fbwrap form {
+    margin: .5rem 0 0; display: flex; flex-direction: column; gap: .25rem;
+    max-width: 420px;
+  }
+  .fbopt {
+    text-align: left; font: inherit; font-size: .8rem; cursor: pointer;
+    padding: .4rem .6rem; border-radius: 6px; background: none; color: inherit;
+    border: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
+  }
+  .fbopt:hover { border-color: color-mix(in srgb, CanvasText 45%, transparent); }
+  .fbeffect { display: block; opacity: .5; font-size: .72rem; margin-top: .1rem; }
 ${SCORING_STYLE}`;
 
 function statusClass(status: string): string {
   return status === "sent" ? "sent" : status === "failed" ? "failed" : "pending";
+}
+
+/**
+ * One gesture, four destinations.
+ *
+ * The choice is what routes the verdict — "this sender is noise" and "this
+ * conversation is finished" are different claims with different lifespans, and a
+ * bare thumbs-down that could mean either is unactionable. Each option states
+ * its own effect, so pressing a button is never a mystery.
+ */
+function feedbackControls(briefId: number, threadKey: string): string {
+  const hidden = `
+    <input type="hidden" name="brief_id" value="${briefId}">
+    <input type="hidden" name="thread_key" value="${escapeHtml(threadKey)}">`;
+
+  const option = (c: { id: string; label: string; effect: string }) => `
+    <button type="submit" name="choice" value="${c.id}" class="fbopt">
+      ${escapeHtml(c.label)}<span class="fbeffect">${escapeHtml(c.effect)}</span>
+    </button>`;
+
+  return `
+    <div class="fb">
+      <form class="inline" method="post" action="/feedback">${hidden}
+        <button type="submit" name="choice" value="good" class="fbgood">Good call</button>
+      </form>
+      <details class="fbwrap">
+        <summary>Not right</summary>
+        <form method="post" action="/feedback">${hidden}
+          ${[...NOT_IMPORTANT_CHOICES, ...OTHER_CHOICES].map(option).join("")}
+        </form>
+      </details>
+    </div>`;
 }
 
 function renderCard(brief: BriefSummary): string {
@@ -144,16 +198,16 @@ function renderCard(brief: BriefSummary): string {
       }
       ${
         c.emails.length
-          ? `<div class="label">Needs a reply (${c.emails.length})</div>
+          ? `<div class="label">Needs attention (${c.emails.length})</div>
              <ol>${c.emails
                .map(
                  (e) =>
                    `<li>${escapeHtml(e.line)}${
                      e.reason ? ` <span class="why">— ${escapeHtml(e.reason)}</span>` : ""
-                   }</li>`,
+                   }${feedbackControls(brief.id, e.thread_key)}</li>`,
                )
                .join("")}</ol>`
-          : `<div class="label">Needs a reply</div><div class="line" style="opacity:.55">Nothing surfaced.</div>`
+          : `<div class="label">Needs attention</div><div class="line" style="opacity:.55">Nothing surfaced.</div>`
       }`
     : payload.error
       ? `<div class="err">${escapeHtml(payload.error)}</div>`
@@ -213,9 +267,9 @@ export function renderBriefsPage(
   <main>
     <header>
       <h1>Briefs</h1>
-      <a href="/">← Accounts</a>
+      <a href="/rules">Rules →</a>
     </header>
-    <div class="sub">What went out, and what would go out right now.</div>
+    <div class="sub"><a href="/">← Accounts</a> &nbsp;·&nbsp; What went out, what would go out right now, and what you thought of it.</div>
 
     <div class="block">
       <h2 class="section">Ranking right now</h2>

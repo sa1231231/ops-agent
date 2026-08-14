@@ -1,4 +1,7 @@
 import { pool } from "../db/pool.js";
+import { loadRuleSet } from "../db/queries/rules.js";
+import { deadlineFor } from "../signals/deadlines.js";
+import { BRIEF_TZ } from "../time.js";
 import {
   rankThreads,
   scoreThread,
@@ -102,7 +105,7 @@ where a.status <> 'disabled'
   and t.last_inbound_at >= $1::timestamptz - ($4 || ' days')::interval
 `;
 
-function toCandidate(row: CandidateRow): ThreadCandidate {
+function toCandidate(row: CandidateRow, now: Date): ThreadCandidate {
   return {
     accountId: row.account_id,
     accountEmail: row.account_email,
@@ -123,19 +126,32 @@ function toCandidate(row: CandidateRow): ThreadCandidate {
     lastOutboundToSenderAt: row.last_outbound_to_sender_at,
     meetingSoonAt: row.meeting_soon_at,
     metRecentlyAt: row.met_recently_at,
+    // Resolved here rather than in the scorer: it needs a timezone, and
+    // `signals/` is deliberately free of both env and clock.
+    deadline: deadlineFor(
+      `${row.subject ?? ""} ${row.snippet ?? ""}`,
+      row.last_inbound_at,
+      now,
+      BRIEF_TZ,
+    ),
   };
 }
 
 /** Every candidate, scored and ranked — before the score floor is applied. */
 export async function scoreAllCandidates(now = new Date()): Promise<ScoredThread[]> {
-  const { rows } = await pool.query<CandidateRow>(CANDIDATE_SQL, [
-    now.toISOString(),
-    String(W.MEETING_SOON_HOURS),
-    String(W.MET_RECENTLY_DAYS),
-    String(W.CANDIDATE_MAX_AGE_DAYS),
+  // The rule set is loaded once and shared across every candidate, which keeps
+  // `scoreThread` a pure function of its arguments.
+  const [{ rows }, rules] = await Promise.all([
+    pool.query<CandidateRow>(CANDIDATE_SQL, [
+      now.toISOString(),
+      String(W.MEETING_SOON_HOURS),
+      String(W.MET_RECENTLY_DAYS),
+      String(W.CANDIDATE_MAX_AGE_DAYS),
+    ]),
+    loadRuleSet(),
   ]);
 
-  return rankThreads(rows.map((row) => scoreThread(toCandidate(row), now)));
+  return rankThreads(rows.map((row) => scoreThread(toCandidate(row, now), now, rules)));
 }
 
 /** What actually reaches the model: above the floor, capped, deterministic. */

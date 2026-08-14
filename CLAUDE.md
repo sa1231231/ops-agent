@@ -63,7 +63,10 @@ Single developer.
 **7. One service. The schedule runs inside the web service, not a separate cron worker.**
 Reversal of the original two-service split, forced rather than chosen: Railway rejects every deployment of the cron worker before a build is created, with identical config to the web service that deploys fine from the same commit. See *Where the schedule actually runs*. `jobs/worker.ts` is unchanged and still runs standalone, so this is reversible with one env var — but the deployed topology is now a single service plus Postgres.
 
-**8. The model does not write the schedule.**
+**8. Tuning is layered, and every layer is a number.**
+The system learns from verdicts, stored in Postgres, applied as signed score adjustments. **No rule may ever exclude a thread outright.** A hard exclusion cannot be overridden by evidence, so the day a demoted sender finally says something that matters, the brief stays silent and stops being trusted. See *Tuning*. Tested in `signals/rules.test.ts`, which asserts that a maximally-demoted sender with a genuinely urgent thread still clears the floor.
+
+**9. The model does not write the schedule.**
 Meeting times, titles, and conflicts are rendered from calendar rows. They are facts already in Postgres with exactly one correct answer; a model restating them spends tokens and adds a way to be wrong about the only part of the brief that is not a judgement call. The model gets the schedule as context for the priorities, and is told not to restate it.
 
 ---
@@ -84,11 +87,12 @@ Meeting times, titles, and conflicts are rendered from calendar rows. They are f
 src/
   db/         pool.ts, migrate.ts, migrations/*.sql, queries/
   auth/       google.ts (one OAuth path), crypto.ts (AES-256-GCM token storage)
-  sources/    gmail.ts, calendar.ts        → normalize into Postgres
-  signals/    weights.ts, score.ts         → pure functions over DB rows
-  ranking/    candidates.ts, compose.ts    → prefilter, then one LLM call
+  sources/    gmail.ts, calendar.ts           → normalize into Postgres
+  signals/    weights.ts, score.ts, rules.ts  → pure functions over DB rows
+  ranking/    candidates.ts, compose.ts       → prefilter, then one LLM call
   outputs/    render.ts (layout), sms.ts, whatsapp.ts, operatorEmail.ts
-  web/        server.ts, admin.ts, oauth.ts, briefPage.ts, briefsPage.ts, scoringPage.ts, jobs.ts
+  web/        server.ts, admin.ts, oauth.ts, briefPage.ts, briefsPage.ts,
+              scoringPage.ts, rulesPage.ts, feedback.ts, jobs.ts
   jobs/       sync.ts, brief.ts, worker.ts (runCycle), scheduler.ts (hourly tick)
 ```
 
@@ -106,6 +110,10 @@ The `sources → signals → ranking → outputs` split is what keeps this from 
 - **`briefs`** — local_date (indexed, **not** unique — several per day allowed), payload jsonb (`trigger`, composed brief, rendered meeting and conflict lines, rendered text, scoring snapshot), status, message_sid, sent_at, share_token, share_expires_at
 - **`brief_items`** — brief_id, kind, ref_key, rank, reason, `first_seen_brief_date` — *carry-over state*
 - **`sync_runs`** — account_id, source, started_at, finished_at, status, error, counts jsonb
+- **`feedback`** — brief_id, thread_key, verdict, choice, note, score_at_time — *append-only; the source of truth and the regression corpus*
+- **`sender_rules`** — pattern, scope, account_id, adjustment, confidence, reason, source_brief, times_fired, last_fired_at · UNIQUE(pattern, scope, account_id)
+- **`thread_rules`** — thread_key UNIQUE, verdict (pin|mute), expires_at, reason
+- **`brief_rules`** — rule, active — *injected into the prompt*
 
 **Token storage:** AES-256-GCM via `node:crypto`, key from `TOKEN_ENC_KEY` (32 bytes, base64). Tokens are never logged and never rendered in the admin console.
 
@@ -165,7 +173,12 @@ Deterministic rules narrow the field first; only survivors go to the model. Keep
 - Correspondent strength from the sender graph (how often and how recently he emails them)
 - Sender is an attendee of a meeting within `MEETING_SOON_HOURS` (48)
 - Sender attended a meeting within `MET_RECENTLY_DAYS` (2) with nothing sent since
-- Explicit ask detected (question marks, "can you", deadline language, near-future dates)
+- Explicit ask detected (question marks, "can you", deadline language)
+- **A named date that has arrived** — `signals/deadlines.ts` resolves "by Friday", "EOD", "by Aug 20" against *when the message was sent*, then compares to today: `DEADLINE_TODAY` (+24), `DEADLINE_OVERDUE` (+20), `DEADLINE_TOMORROW` (+12). Distinct from the `deadline` ask-pattern, which only matches the words and scores the same whether Friday is tomorrow or was three weeks ago.
+
+  **Suppressed entirely for machine senders**, and that is the difference between it working and not: marketing copy is built out of "today", "last chance" and "next Thursday". Against live data every single false positive was a newsletter. The automated penalty would have cancelled the boost anyway, but only by arithmetic accident.
+
+  Resolution is conservative — anything ambiguous returns null. A missed deadline is recoverable; "this is due today" when it is not is the error that makes someone stop reading.
 
 **Demotions**
 - `NOTIFICATION_RELAY` (−60) — Slack, Discord, Google Voice, LinkedIn, Zoom and similar. The real conversation lives in that app; the email is a doorbell. Generalized from a Google Voice special case, because the same reasoning covers every platform that emails "you have a message".
@@ -192,6 +205,75 @@ One page carries both the live scoring view and the brief history, because the q
 Default view is one plain-English line per candidate — the two or three signals that decided it, plus what held it back. Point values are one `<details>` click away. The full ranked list, the below-the-floor set, and the current weights table are all collapsed by default: the numbers are what you change, but reading fourteen chips per row is the wrong way to answer "is this ranking sensible".
 
 It recomputes from current data, so a weight change is visible on reload. Each sent brief also stores a `scoring` snapshot in its payload, because the live page cannot answer "why did Tuesday's brief pick that" — the mail and the correspondent graph have moved on since.
+
+---
+
+## Tuning
+
+How the brief gets better without anyone editing code, and how it is stopped from quietly getting worse.
+
+**The governing invariant: a rule adjusts a score, it never makes a decision.** There is deliberately no way to express "never show this". A hard exclusion cannot be overridden by evidence, so the day a demoted sender finally sends something urgent, the brief would stay silent — and one silent morning like that costs more trust than a hundred noisy items. `signals/rules.test.ts` asserts this directly: a sender demoted at full strength with a genuinely urgent thread still clears the floor.
+
+### One gesture, four destinations
+
+A thumbs-down is not itself a layer; it is the input. The multiple-choice answer routes it:
+
+| He picks | Goes to | Effect |
+|---|---|---|
+| "This sender rarely matters" | `sender_rules` (address) | Demotes that address everywhere |
+| "Nothing from this company matters" | `sender_rules` (domain) | Demotes the whole domain |
+| "Already handled — call, text, in person" | `thread_rules` (mute) | Silences one thread for 30 days |
+| "I was only Cc'd" | `feedback` only | Accumulates toward a weight suggestion |
+| "Right item, wrong position / described badly" | `feedback` only | Recorded; no scoring change |
+
+"This sender is noise" and "this conversation is finished" are different claims with different lifespans, which is why a bare thumbs-down that could mean either is unactionable.
+
+He never has to think in points. Each option states its own effect, so pressing a button is never a mystery.
+
+### Layer 0 — the correspondent graph *(automatic)*
+
+Already built. One row per person per account, counting which direction mail flows. The load-bearing column is `outbound_count`: **anyone can email him; only he decides who is worth answering.** Built from Sent metadata at cold start and updated by every sync, so it improves daily with no human input.
+
+> As of Aug 2026 with 3 accounts connected it holds 34 rows and **zero** strong correspondents (10+ outbound). That is why `NEVER_CORRESPONDED` is doing so much work right now. **Do not tune hard against this sample** — connecting the remaining ~12 accounts will change it completely, and rules written against today's data may need unwinding.
+
+### Layer 1 — sender rules
+
+Address or domain, optionally scoped to one mailbox. Most specific match wins, and only one rule ever applies — stacking an address rule on its own domain rule would double-count one judgement.
+
+**`confidence` is the anti-overreaction mechanism.** Repeat verdicts raise the count rather than adding rows, and the applied points scale with it: 1 vote → 25%, 2 → 45%, 3–4 → 65%, 5–7 → 85%, 8+ → 100%. One irritated morning cannot blacklist a real correspondent, and a young rule stays weak enough to be overruled. Adjustments are clamped to ±`SENDER_RULE_MAX`.
+
+**`times_fired` is the audit**, and it is bumped **only on a real send** — never on a console page load, since the scoring view recomputes on every refresh and counting those would make a rule look load-bearing when nobody had done anything but look at it.
+
+### Layer 2 — thread rules
+
+`pin` survives the aging curve; `mute` handles the most common false positive in a system built on `awaiting_reply`: **a thread he resolved on a phone call**, which otherwise looks unanswered for 45 days. Neither the model nor the graph can ever infer that.
+
+**Mutes expire** (30 days). A thread that comes back to life months later is genuinely new information.
+
+### Layer 3 — suggestions, never automatic
+
+A query over accumulated verdicts, not a stored rule. It reads the per-brief `scoring` snapshot, so it reflects what actually fired on the morning he judged rather than what would fire today. Requires at least five judgements on a signal before saying anything.
+
+It proposes; a human decides; the result is a number in `weights.ts`. **Nothing here changes scoring on its own** — an unsupervised suggestion engine is precisely the drift this design is trying to avoid.
+
+### Layer 4 — standing instructions
+
+`brief_rules`, injected into the system prompt for things arithmetic cannot express ("never use an email address as someone's name"). **The least reliable layer** — the model usually obeys, which is weaker than the guarantee every other layer gives. Keep it small; push anything expressible as a number down to Layer 1.
+
+### Catching what was never shown
+
+False negatives are the failure mode that kills trust and they are invisible — he will never report the email he was not shown, because he does not know it exists. Two paths:
+
+1. **The below-floor list on `/briefs`** carries a "this should have surfaced" button. It is the only manual way to catch a miss, and the reason that list stays visible.
+2. **Reply-outcome tracking** *(not built yet)* — the next sync reveals which threads he replied to. Surfaced-and-replied is a good call; **not-surfaced-and-replied is a miss the system can detect on its own**, with zero effort from him. Highest-value thing still on the list.
+
+### How drift is prevented
+
+- **Every rule is visible on `/rules`**, with its vote count, fire count, reason, and originating brief. A rule at zero fires after 60 days is dead weight; one firing constantly is either load-bearing or far too broad. Nothing accumulates in the dark, which is the actual mechanism behind a system quietly getting worse.
+- **The verdicts are the regression suite.** `feedback` is append-only and stores `score_at_time`. Replaying past verdicts against changed weights answers "which judgements would this change break" — better than generated test files, because it lives in data and needs no codegen.
+- **The `scoring` snapshot in every brief payload** is 30 days of real historical candidate sets, already being collected. That makes "this weight change would have altered 4 of the last 30 briefs, here they are" possible without new plumbing.
+
+---
 
 ### Carry-over is what earns trust
 
@@ -262,8 +344,8 @@ PRIORITIES
 
 2. ...
 
-NEEDS A REPLY
-1. <who and what they want>
+NEEDS ATTENTION
+1. <what needs him and from whom>
 
 2. ...
 ```
@@ -277,6 +359,8 @@ Schedule first because it is fixed and time-bound; priorities next because they 
 **Only real double-bookings reach the message.** `findConflicts` still detects back-to-backs and the model still sees them, but they are filtered out of `conflictLines()` — his standups butt against each other every morning, so a "no gap" line fired daily and taught him to skip the section. Overlaps are grouped into clusters rather than listed pairwise, because a triple booking produces three pairs and three lines describing one problem reads as three problems.
 
 **Every numbered item gets a blank line after it**, in both sections. They wrap on a phone, and without the separation a run of wrapped items reads as one paragraph — the thing this layout exists to avoid. `renderPlainText` collapses `\n{3,}` to `\n\n`, so the per-item blanks and the section separators never compound into a gap.
+
+**"Needs attention", not "needs a reply".** Most items are unanswered threads, but not all: a deadline he was given that lands today, a commitment coming due, a meeting he is unprepared for. Naming the section after one of its cases was quietly narrowing what could go in it.
 
 **No link.** The brief page is still built, tokened, and stored — the console's history links to it — but the message stands on its own. A URL he never taps is a segment paid for every morning.
 

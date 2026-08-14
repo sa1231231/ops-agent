@@ -147,7 +147,7 @@ describe("the rendered message", () => {
     const text = render();
     assert.ok(
       text.indexOf("MEETINGS") < text.indexOf("PRIORITIES") &&
-        text.indexOf("PRIORITIES") < text.indexOf("NEEDS A REPLY"),
+        text.indexOf("PRIORITIES") < text.indexOf("NEEDS ATTENTION"),
       "section order changed",
     );
   });

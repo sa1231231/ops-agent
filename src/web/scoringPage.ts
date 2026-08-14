@@ -58,6 +58,13 @@ export const SCORING_STYLE = `
   .wtable { font-size: .8rem; opacity: .75; margin-top: .5rem; }
   .wtable td { padding: .15rem .9rem .15rem 0; }
   .wtable code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  form.missed { margin: .4rem 0 0; }
+  form.missed button {
+    font: inherit; font-size: .74rem; cursor: pointer; padding: .12rem .5rem;
+    border-radius: 5px; background: none; color: inherit; opacity: .65;
+    border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+  }
+  form.missed button:hover { opacity: 1; }
 `;
 
 /**
@@ -118,6 +125,23 @@ function chips(t: ScoredThread): string {
     .join("");
 }
 
+/**
+ * The false-negative path.
+ *
+ * He will never think to report the email we did not show him — he does not
+ * know it exists. This is the only place it can be caught by hand, which is why
+ * the below-floor list is worth keeping visible at all.
+ */
+function missedButton(t: ScoredThread): string {
+  const key = `${t.candidate.accountId}:${t.candidate.gmailThreadId}`;
+  return `
+    <form class="missed" method="post" action="/feedback">
+      <input type="hidden" name="thread_key" value="${escapeHtml(key)}">
+      <input type="hidden" name="score" value="${Math.round(t.score)}">
+      <button type="submit" name="choice" value="missed">This should have surfaced</button>
+    </form>`;
+}
+
 function renderRow(t: ScoredThread, above: boolean): string {
   const c = t.candidate;
   return `
@@ -133,6 +157,7 @@ function renderRow(t: ScoredThread, above: boolean): string {
           <summary>points</summary>
           <div class="chips">${chips(t)}</div>
         </details>
+        ${above ? "" : missedButton(t)}
       </div>
     </div>`;
 }

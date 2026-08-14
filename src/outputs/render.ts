@@ -168,7 +168,12 @@ export function renderPlainText(
   }
 
   if (brief.emails.length > 0) {
-    lines.push("NEEDS A REPLY");
+    lines.push("NEEDS ATTENTION");
+    // Deliberately not "needs a reply". Plenty of what belongs here is not a
+    // reply at all: a deadline he was given that lands today, a commitment he
+    // made, a meeting with no agenda. Naming the section after one of its cases
+    // was quietly narrowing what could go in it.
+    //
     // `reason` is still composed and still stored — carry-over, the brief page,
     // and the history all use it. It just does not go in the message: "unanswered
     // 4 days, deadline today" restated what the line above already said.
