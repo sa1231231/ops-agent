@@ -60,8 +60,8 @@ Hourly is not about completeness — the Gmail history cursor picks up everythin
 **6. Direct commits to `main`. No pull requests.**
 Single developer.
 
-**7. The schedule runs inside the web service, not a separate cron worker.**
-Reversal of the original two-service split, forced rather than chosen: Railway rejects every deployment of the cron worker before a build is created, with identical config to the web service that deploys fine from the same commit. See *Where the schedule actually runs*. `jobs/worker.ts` is unchanged and still runs standalone, so this is reversible with one env var.
+**7. One service. The schedule runs inside the web service, not a separate cron worker.**
+Reversal of the original two-service split, forced rather than chosen: Railway rejects every deployment of the cron worker before a build is created, with identical config to the web service that deploys fine from the same commit. See *Where the schedule actually runs*. `jobs/worker.ts` is unchanged and still runs standalone, so this is reversible with one env var — but the deployed topology is now a single service plus Postgres.
 
 **8. The model does not write the schedule.**
 Meeting times, titles, and conflicts are rendered from calendar rows. They are facts already in Postgres with exactly one correct answer; a model restating them spends tokens and adds a way to be wrong about the only part of the brief that is not a judgement call. The model gets the schedule as context for the priorities, and is told not to restate it.
@@ -72,7 +72,7 @@ Meeting times, titles, and conflicts are rendered from calendar rows. They are f
 
 - **Node + TypeScript** — `tsx` in dev, `tsc` for prod
 - **Postgres on Railway** — dev and prod instances both there, connection string from env. Nothing runs on the dev box except the code and Claude Code.
-- **Railway hosting** — one repo. The web service serves the console and, with `ENABLE_SCHEDULER=1`, owns the hourly cycle. A separate cron-worker service exists but has never deployed successfully (see *Where the schedule actually runs*).
+- **Railway hosting** — one repo, **one service**. `ops-agent` serves the console and, with `ENABLE_SCHEDULER=1`, owns the hourly cycle. The `ops-agent-worker` cron service is being removed (see *Where the schedule actually runs*).
 - **Anthropic API** — `claude-opus-5` for ranking and composition
 - **Twilio SMS** — delivery (WhatsApp kept behind `DELIVERY_CHANNEL`, unused)
 
@@ -287,6 +287,8 @@ Schedule first because it is fixed and time-bound; priorities next because they 
 
 Sent after the client's and never fatal. A bad operator number must not turn a delivered brief into a failed run. Skipped when it equals the client number, which it often does during tuning.
 
+Covered by tests in `outputs/render.test.ts` alongside the layout — the message is the product, and the two things easiest to break silently are which conflicts he is told about and whether the text stays inside GSM-7.
+
 ### Repeat sends
 
 There is deliberately **no one-per-day lock**. `briefs.local_date` was UNIQUE and doubled as an idempotency gate, which meant a manual test send consumed the day's slot and blocked the scheduled one — unworkable while ranking and format are being tuned.
@@ -307,7 +309,9 @@ Job state is a single in-memory record (`web/jobs.ts`), correct for a single ins
 
 This is not the original design. The separate Railway cron service **fails every deployment before a build is even created** — no build logs beyond "scheduling build on Metal builder", no runtime logs, `buildLogs` returns "deployment does not have an associated build". Its config is identical to the web service (same repo, same RAILPACK builder, same commit) and the web service deploys fine from the same push. Nothing in this repo can reach that failure. A brief that fires is worth more than a tidy split of processes, and the console already ran this exact job in-process via the Run-now button.
 
-`jobs/worker.ts` still stands alone and still works — if the cron service is ever fixed, set `ENABLE_SCHEDULER=0` on the web service and it takes over unchanged.
+**The worker service is gone.** Its deploy trigger and cron schedule were removed first — a project access token cannot delete a service (`serviceDelete` returns "Not Authorized", the same limit that blocks `serviceConnect`), so the deletion itself happens in the Railway UI. Three things had to be true before it was safe to leave lying around: no auto-deploy on push, no cron schedule, and the double-send guard below.
+
+`jobs/worker.ts` still stands alone and still works — `npm run start:worker` runs one cycle and exits. If a platform cron is ever wanted again, point it at that and set `ENABLE_SCHEDULER=0`.
 
 **Two schedulers cannot double-send.** Every run carries a `trigger` (`"scheduled"` or `"manual"`), stored in the brief payload. A scheduled run skips if a scheduled send already exists for the local date (`scheduledSendExists`). This is deliberately narrower than the UNIQUE constraint it replaces: manual runs stay unlimited, which is the whole reason that constraint was dropped.
 
