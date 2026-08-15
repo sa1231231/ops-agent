@@ -35,10 +35,10 @@ import {
   deleteBriefRule,
   deleteSenderRule,
   deleteThreadRule,
+  feedbackForBriefs,
   listSenderRules,
   listThreadRules,
   missedThreads,
-  outcomeStats,
   recordFeedback,
   setThreadRule,
   upsertSenderRule,
@@ -51,12 +51,12 @@ import {
   choiceById,
   isPriorityChoice,
   MUTE_DAYS,
+  priorityNote,
   PROPOSED_ADJUSTMENT,
 } from "./feedback.js";
 import { jobState, startJob } from "./jobs.js";
 import { renderBriefPage, type BriefPayload } from "./briefPage.js";
 import { BRIEFS_PER_PAGE, renderBriefsPage } from "./briefsPage.js";
-import { scoreAllCandidates } from "../ranking/candidates.js";
 import { handleCallback, handleConnect } from "./oauth.js";
 
 /**
@@ -251,7 +251,10 @@ async function handleFeedbackPost(
       threadKey: null,
       verdict: choiceId === "priority-good" ? "good" : "badly-written",
       choice: choiceId,
-      note: `priority ${form.get("priority_index") ?? "?"}: ${(form.get("note") ?? "").slice(0, 300)}`,
+      note: priorityNote(
+        Number.parseInt(form.get("priority_index") ?? "0", 10),
+        form.get("note") ?? "",
+      ),
     });
     res.writeHead(303, {
       Location: `/briefs?saved=${encodeURIComponent("Recorded against the priorities.")}`,
@@ -306,7 +309,13 @@ async function handleFeedbackPost(
 
   const choice = choiceById(choiceId);
   const verdict: Verdict =
-    choiceId === "good" ? "good" : choiceId === "missed" ? "missed" : (choice?.verdict ?? "not-important");
+    choiceId === "good"
+      ? "good"
+      : choiceId === "missed"
+        ? "missed"
+        : choiceId === "not-missed"
+          ? "correctly-omitted"
+          : (choice?.verdict ?? "not-important");
 
   await recordFeedback({
     briefId,
@@ -376,6 +385,15 @@ async function handleFeedbackPost(
         reason: "handled outside email",
       });
       note = `Muted that thread for ${MUTE_DAYS} days.`;
+      break;
+
+    case "not-missed":
+      // No rule, deliberately. He confirmed the ranking was right to leave it
+      // out, and the ranking already does that on its own — writing a rule to
+      // reinforce a decision the weights reached unaided would be double
+      // counting. It is recorded, so a replay can tell a correct omission from
+      // an untested one.
+      note = "Recorded. It was right to leave that out.";
       break;
 
     case "cc-noise":
@@ -595,16 +613,19 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const requested = Number.parseInt(url.searchParams.get("page") ?? "1", 10);
     const page = Number.isFinite(requested) && requested > 0 ? requested : 1;
 
-    const [total, briefs, scored, stats, missed] = await Promise.all([
+    const [total, briefs, missed] = await Promise.all([
       countBriefs(),
       listBriefs(BRIEFS_PER_PAGE, (page - 1) * BRIEFS_PER_PAGE),
-      scoreAllCandidates(),
-      outcomeStats(),
       missedThreads(),
     ]);
 
+    // Second round-trip: which of these were already judged, so the page states
+    // the verdict instead of offering the buttons again. Pressing one twice
+    // would count a single opinion as two votes of confidence.
+    const recorded = await feedbackForBriefs(briefs.map((b) => b.id));
+
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(renderBriefsPage(briefs, page, total, scored, stats, missed));
+    res.end(renderBriefsPage(briefs, page, total, missed, recorded));
     return;
   }
 

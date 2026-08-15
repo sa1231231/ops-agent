@@ -116,6 +116,53 @@ export function isPriorityChoice(id: string): boolean {
   return id === "priority-good" || PRIORITY_CHOICES.some((c) => c.id === id);
 }
 
+/**
+ * What a recorded verdict reads as once it is in.
+ *
+ * Every choice needs an entry, including the ones with no menu behind them
+ * ("good", "missed"), because the page shows what was already decided rather
+ * than offering the buttons again — pressing one twice would count one opinion
+ * as two votes and make a rule stronger than the evidence behind it.
+ */
+const EXTRA_LABELS: Record<string, string> = {
+  good: "Good call",
+  "priority-good": "Good call",
+  missed: "Should have been in the brief",
+  "not-missed": "Right to leave out",
+};
+
+export function verdictLabel(choiceId: string | null): string {
+  if (!choiceId) return "Judged";
+  return (
+    EXTRA_LABELS[choiceId] ??
+    ALL_CHOICES.find((c) => c.id === choiceId)?.label ??
+    PRIORITY_CHOICES.find((c) => c.id === choiceId)?.label ??
+    "Judged"
+  );
+}
+
+/** Whether a recorded choice was an approval, for how it is coloured. */
+export function isApproval(choiceId: string | null): boolean {
+  return choiceId === "good" || choiceId === "priority-good" || choiceId === "not-missed";
+}
+
+/**
+ * A priority has no thread key, so its verdict is tied to its position.
+ *
+ * Written by the feedback handler and read back by the briefs page. The two
+ * live in different files and neither would fail loudly if the format drifted —
+ * the page would simply stop knowing what had been judged and offer the buttons
+ * again — so the format is defined once, here, and tested.
+ */
+export function priorityNote(index: number, text: string): string {
+  return `priority ${index}: ${text.slice(0, 300)}`;
+}
+
+export function priorityIndexFromNote(note: string | null): number | null {
+  const found = /^priority (\d+):/.exec(note ?? "");
+  return found ? Number.parseInt(found[1]!, 10) : null;
+}
+
 /** How long a "handled elsewhere" mute lasts before the thread can return. */
 export const MUTE_DAYS = 30;
 

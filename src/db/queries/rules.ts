@@ -11,7 +11,13 @@ import * as W from "../../signals/weights.js";
  * tuning change gets checked against every judgement already made.
  */
 
-export type Verdict = "good" | "not-important" | "badly-written" | "missed";
+export type Verdict =
+  | "good"
+  | "not-important"
+  | "badly-written"
+  | "missed"
+  /** He was asked whether something should have been in the brief, and said no. */
+  | "correctly-omitted";
 
 export interface FeedbackInput {
   briefId: number | null;
@@ -350,6 +356,45 @@ export async function weightSuggestions(): Promise<WeightSuggestion[]> {
     .filter((s) => !s.verdict.startsWith("mixed"));
 }
 
+/**
+ * What has already been judged, so the page can say so instead of asking again.
+ *
+ * Not cosmetic. `upsertSenderRule` raises `confidence` on every repeat, and
+ * confidence is what decides how much of an adjustment actually applies — so
+ * pressing the same button twice on the same item turns one opinion into two
+ * votes and makes a rule stronger than the evidence behind it.
+ */
+export interface RecordedVerdict {
+  briefId: number | null;
+  threadKey: string | null;
+  choice: string | null;
+  note: string | null;
+}
+
+export async function feedbackForBriefs(briefIds: number[]): Promise<RecordedVerdict[]> {
+  if (briefIds.length === 0) return [];
+  const { rows } = await pool.query<{
+    brief_id: number | null;
+    thread_key: string | null;
+    choice: string | null;
+    note: string | null;
+  }>(
+    // Latest first: if a verdict was somehow recorded twice, the newest is the
+    // one that describes the current state of the rules.
+    `select brief_id, thread_key, choice, note
+       from feedback
+      where brief_id = any($1::bigint[])
+      order by created_at desc`,
+    [briefIds],
+  );
+  return rows.map((r) => ({
+    briefId: r.brief_id,
+    threadKey: r.thread_key,
+    choice: r.choice,
+    note: r.note,
+  }));
+}
+
 /** Verdicts with enough context to replay them against current scoring. */
 export async function feedbackForReplay(): Promise<
   Array<{ threadKey: string; verdict: string; scoreAtTime: number | null; createdAt: Date }>
@@ -363,7 +408,7 @@ export async function feedbackForReplay(): Promise<
     `select thread_key, verdict, score_at_time, created_at
        from feedback
       where thread_key is not null
-        and verdict in ('good', 'not-important', 'missed')
+        and verdict in ('good', 'not-important', 'missed', 'correctly-omitted')
       order by created_at desc`,
   );
   return rows.map((r) => ({
@@ -375,24 +420,17 @@ export async function feedbackForReplay(): Promise<
 }
 
 /**
- * How the brief is doing, judged by what he actually did.
+ * Threads he answered that a brief could have told him about and did not.
  *
  * We are read-only, but we resync these mailboxes anyway — so his own outbox
- * grades us for free. Surfaced-and-replied is a good call. **Not-surfaced-and-
- * replied is a false negative the system can detect on its own**, which matters
- * because false negatives are otherwise invisible: he will never report the
- * email he was not shown, because he does not know it exists.
+ * finds false negatives for free, which matters because false negatives are
+ * otherwise invisible: he will never report the email he was not shown, because
+ * he does not know it exists.
  *
  * Replying is not the same as mattering — he fires off one-liners and sits on
- * hard things. So this **directs attention and never touches scoring**. It says
- * where to look; he still decides.
+ * hard things. So this **directs attention and never touches scoring**. It asks;
+ * he answers; only his answer creates a rule.
  */
-export interface OutcomeStats {
-  surfaced: number;
-  surfacedAndReplied: number;
-  windowDays: number;
-}
-
 export interface MissedThread {
   threadKey: string;
   subject: string | null;
@@ -403,37 +441,6 @@ export interface MissedThread {
 
 const OUTCOME_WINDOW_DAYS = 7;
 
-export async function outcomeStats(): Promise<OutcomeStats> {
-  const { rows } = await pool.query<{ surfaced: string; replied: string }>(
-    `with surfaced as (
-       select distinct bi.ref_key, min(b.sent_at) as first_shown
-         from brief_items bi
-         join briefs b on b.id = bi.brief_id
-        where bi.kind = 'email'
-          and b.status = 'sent'
-          and b.sent_at > now() - ($1 || ' days')::interval
-        group by bi.ref_key
-     )
-     select count(*)::text as surfaced,
-            count(*) filter (
-              where t.last_outbound_at is not null
-                and t.last_outbound_at >= s.first_shown
-            )::text as replied
-       from surfaced s
-       left join threads t
-         on t.account_id = split_part(s.ref_key, ':', 1)::bigint
-        and t.gmail_thread_id = split_part(s.ref_key, ':', 2)`,
-    [String(OUTCOME_WINDOW_DAYS)],
-  );
-
-  return {
-    surfaced: Number(rows[0]?.surfaced ?? 0),
-    surfacedAndReplied: Number(rows[0]?.replied ?? 0),
-    windowDays: OUTCOME_WINDOW_DAYS,
-  };
-}
-
-/** Threads he answered that no brief ever mentioned. */
 export async function missedThreads(limit = 10): Promise<MissedThread[]> {
   const { rows } = await pool.query<{
     thread_key: string;
@@ -458,6 +465,17 @@ export async function missedThreads(limit = 10): Promise<MissedThread[]> {
         and t.last_inbound_at is not null
         -- He replied to something, rather than starting the conversation.
         and t.last_inbound_at < t.last_outbound_at
+        -- A brief actually went out between the mail arriving and him answering
+        -- it. Without this the list fills with mail that arrived at 9am and was
+        -- answered at 9:05 — no brief could have mentioned it, so asking "should
+        -- this have been in the brief" has no honest answer and a yes would
+        -- promote a sender for nothing.
+        and exists (
+          select 1 from briefs b
+           where b.status = 'sent'
+             and b.sent_at > t.last_inbound_at
+             and b.sent_at < t.last_outbound_at
+        )
         and not exists (
           select 1
             from brief_items bi
