@@ -23,7 +23,7 @@ export interface SignalLike {
 }
 
 export const SCORING_STYLE = `
-  .why-line { font-size: .82rem; opacity: .7; margin: .15rem 0 0; }
+  .why-line { font-size: .82rem; opacity: .75; margin: .35rem 0 0; }
   .why-line .neg { color: #b91c1c; opacity: .85; }
   @media (prefers-color-scheme: dark) { .why-line .neg { color: #f87171; } }
   .why-score {
@@ -61,15 +61,15 @@ export const SCORING_STYLE = `
  * better than anything written here, so it wins where it exists.
  */
 const PHRASES: Record<string, string> = {
-  "awaiting-reply": "waiting on his reply",
+  "awaiting-reply": "waiting on your reply",
   aging: "unanswered a while",
-  "addressed-to": "addressed directly to him",
-  "addressed-cc": "he is only Cc'd",
-  "known-correspondent": "someone he writes to",
-  "never-corresponded": "he has never written to this address",
+  "addressed-to": "addressed directly to you",
+  "addressed-cc": "you were only Cc'd",
+  "known-correspondent": "someone you write to",
+  "never-corresponded": "you have never written to this address",
   "relationship-live": "recent back-and-forth",
-  "meeting-soon": "he is meeting them soon",
-  "met-recently": "met recently, nothing sent since",
+  "meeting-soon": "you are meeting them soon",
+  "met-recently": "you met recently, nothing sent since",
   "explicit-ask": "contains a direct ask",
   conversation: "an active thread",
   automated: "machine sender",
@@ -117,19 +117,23 @@ function chips(signals: SignalLike[]): string {
 }
 
 /**
- * One line of plain English, with the arithmetic one click away.
+ * Why it was picked, behind one click.
  *
- * The numbers are what you change, so they stay reachable; but reading fourteen
- * chips to answer "is this sensible" was the wrong default.
+ * This was a visible line under every item, and it was the wrong call: on a page
+ * whose job is "read the brief and judge it", a running commentary under each
+ * line is noise between him and the thing he came to read. The reasoning still
+ * has to be reachable, since a verdict on a ranking you cannot inspect is a
+ * guess, so it is collapsed rather than removed. Plain English first, the
+ * arithmetic below it, because the numbers are what you change.
  */
 export function renderWhy(score: number | null, signals: SignalLike[]): string {
   if (signals.length === 0) return "";
   return `
-    <div class="why-line">
-      ${score === null ? "" : `<span class="why-score">${Math.round(score)}</span>`}${why(signals)}
-    </div>
     <details class="sig">
-      <summary>points</summary>
+      <summary>Why this was picked</summary>
+      <div class="why-line">
+        ${score === null ? "" : `<span class="why-score">${Math.round(score)}</span>`}${why(signals)}
+      </div>
       <div class="chips">${chips(signals)}</div>
     </details>`;
 }
@@ -141,8 +145,8 @@ export function weightsTable(): string {
     <tr><td><code>AWAITING_REPLY</code></td><td>+${W.AWAITING_REPLY}</td><td>last message inbound, no reply since</td></tr>
     <tr><td><code>aging</code></td><td>+${W.agingScore(0.5)} &hellip; +${W.agingScore(4)} &hellip; +${W.agingScore(40)}</td><td>peaks at 2-7 days, falls off after 14</td></tr>
     <tr><td><code>ADDRESSED_TO</code></td><td>+${W.ADDRESSED_TO} / +${W.ADDRESSED_CC}</td><td>To: versus Cc:</td></tr>
-    <tr><td><code>known-correspondent</code></td><td>+${W.correspondentScore(1)} / +${W.correspondentScore(3)} / +${W.correspondentScore(10)}</td><td>by how often he writes to them</td></tr>
-    <tr><td><code>NEVER_CORRESPONDED</code></td><td>${W.NEVER_CORRESPONDED}</td><td>he has never written to this address</td></tr>
+    <tr><td><code>known-correspondent</code></td><td>+${W.correspondentScore(1)} / +${W.correspondentScore(3)} / +${W.correspondentScore(10)}</td><td>by how often you write to them</td></tr>
+    <tr><td><code>NEVER_CORRESPONDED</code></td><td>${W.NEVER_CORRESPONDED}</td><td>you have never written to this address</td></tr>
     <tr><td><code>MEETING_SOON</code></td><td>+${W.MEETING_SOON}</td><td>meeting with the sender inside ${W.MEETING_SOON_HOURS}h</td></tr>
     <tr><td><code>MET_RECENTLY</code></td><td>+${W.MET_RECENTLY}</td><td>met within ${W.MET_RECENTLY_DAYS} days, nothing sent since</td></tr>
     <tr><td><code>EXPLICIT_ASK</code></td><td>+${W.EXPLICIT_ASK}</td><td>question, deadline, or chase detected</td></tr>

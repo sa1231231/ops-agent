@@ -98,11 +98,13 @@ export function renderBriefPage(
             // Kept visible even when the message left it out, because this page
             // is the full record. Marked, so "it is here and not in my text" is
             // an answer rather than a discrepancy.
+            // No `reason`. Same rule as the console: the line has already said
+            // it, and a second sentence underneath reads as the page talking
+            // about itself. The covered-by-a-priority note stays, because it
+            // explains why this page and his text message differ.
             `<li>${escapeHtml(e.line)}${
-              e.reason ? `<span class="why">${escapeHtml(e.reason)}</span>` : ""
-            }${
               e.coveredByPriority
-                ? `<span class="why">covered by a priority above; not repeated in the message</span>`
+                ? `<span class="why">covered by a priority above, not repeated in the message</span>`
                 : ""
             }</li>`,
         )

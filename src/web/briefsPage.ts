@@ -1,4 +1,3 @@
-import { BRIEF_RETENTION_DAYS } from "../config.js";
 import type { BriefSummaryWithRuns } from "../db/queries/briefs.js";
 import type { MissedThread, RecordedVerdict } from "../db/queries/rules.js";
 import { formatLocalTime } from "../time.js";
@@ -131,10 +130,20 @@ const STYLE = `
     border-top: 1px solid color-mix(in srgb, CanvasText 12%, transparent);
   }
 
-  /* The judgement controls. Quiet until wanted: two words at the end of an item,
-     barely there, full contrast on hover. They repeat on every line, and at full
-     strength they compete with the brief itself for attention. */
-  .judge { display: flex; align-items: center; gap: .1rem; margin-top: .25rem; }
+  /* Item text left, controls right, on one line. The controls sit in the same
+     place on every row, which is what makes them scannable; the text keeps the
+     full width it needs and wraps underneath itself rather than being squeezed
+     into a column beside them. */
+  .itemrow { display: flex; align-items: baseline; gap: 1rem; }
+  .itemtext { flex: 1; min-width: 0; }
+
+  /* Quiet until wanted: two words at the end of an item, barely there, full
+     contrast on hover. They repeat on every line, and at full strength they
+     compete with the brief itself for attention. */
+  .judge {
+    display: flex; align-items: center; gap: .1rem;
+    flex: none; margin-left: auto; position: relative;
+  }
   .judge form { margin: 0; display: inline; }
   .judge button, .judge summary {
     font: inherit; font-size: .74rem; cursor: pointer; padding: .1rem .45rem;
@@ -153,12 +162,19 @@ const STYLE = `
   .judge .dot { opacity: .2; font-size: .7rem; }
 
   /* The menu, once opened. A bordered card so it reads as one question with
-     several answers rather than a stack of unrelated buttons. */
+     several answers rather than a stack of unrelated buttons.
+
+     Floated over the page rather than pushed into the row: the controls are
+     narrow and right-aligned now, so a menu in the flow would either stretch
+     that column and crush the text beside it, or reflow the whole card every
+     time one is opened. */
   .menu {
-    margin: .35rem 0 .2rem; padding: .3rem; display: flex; flex-direction: column;
-    gap: .1rem; max-width: 30rem; border-radius: 8px;
-    border: 1px solid color-mix(in srgb, CanvasText 15%, transparent);
-    background: color-mix(in srgb, CanvasText 3%, transparent);
+    position: absolute; right: 0; top: calc(100% + .3rem); z-index: 5;
+    width: min(28rem, 78vw); padding: .3rem;
+    display: flex; flex-direction: column; gap: .1rem; border-radius: 8px;
+    border: 1px solid color-mix(in srgb, CanvasText 22%, transparent);
+    background: Canvas;
+    box-shadow: 0 8px 24px color-mix(in srgb, CanvasText 18%, transparent);
   }
   .menu button {
     text-align: left; font: inherit; font-size: .8rem; cursor: pointer;
@@ -170,7 +186,8 @@ const STYLE = `
 
   /* Already judged: a fact, not a control. */
   .judged {
-    display: inline-block; font-size: .72rem; margin-top: .3rem;
+    display: inline-block; font-size: .72rem; flex: none; margin-left: auto;
+    white-space: nowrap;
     padding: .1rem .45rem; border-radius: 5px;
     background: color-mix(in srgb, CanvasText 8%, transparent); opacity: .75;
   }
@@ -333,12 +350,15 @@ function renderCard(brief: BriefSummaryWithRuns, verdicts: Map<string, string | 
              <ol>${c.priorities
                .map(
                  (p, i) =>
-                   `<li>${escapeHtml(p)}${priorityControls(
-                     brief.id,
-                     i + 1,
-                     p,
-                     verdicts.get(`${brief.id}|#${i + 1}`),
-                   )}</li>`,
+                   `<li><div class="itemrow">
+                      <div class="itemtext">${escapeHtml(p)}</div>
+                      ${priorityControls(
+                        brief.id,
+                        i + 1,
+                        p,
+                        verdicts.get(`${brief.id}|#${i + 1}`),
+                      )}
+                    </div></li>`,
                )
                .join("")}</ol>`
           : ""
@@ -349,13 +369,21 @@ function renderCard(brief: BriefSummaryWithRuns, verdicts: Map<string, string | 
              <ol>${c.emails
                .map((e) => {
                  const row = snapshot.get(e.thread_key);
-                 return `<li>${escapeHtml(e.line)}${
-                   e.reason ? ` <span class="why">(${escapeHtml(e.reason)})</span>` : ""
-                 }${renderWhy(row?.score ?? null, row?.signals ?? [])}${threadControls(
-                   brief.id,
-                   e.thread_key,
-                   verdicts.get(`${brief.id}|${e.thread_key}`),
-                 )}</li>`;
+                 // No `reason` here. It reads as commentary on a line that has
+                 // already said the thing, and two sentences where one will do
+                 // is what makes a page tiring rather than informative. It is
+                 // still composed and stored: carry-over depends on it.
+                 return `<li>
+                   <div class="itemrow">
+                     <div class="itemtext">${escapeHtml(e.line)}</div>
+                     ${threadControls(
+                       brief.id,
+                       e.thread_key,
+                       verdicts.get(`${brief.id}|${e.thread_key}`),
+                     )}
+                   </div>
+                   ${renderWhy(row?.score ?? null, row?.signals ?? [])}
+                 </li>`;
                })
                .join("")}</ol>`
           : `<div class="label">Needs attention</div><div class="line" style="opacity:.55">Nothing surfaced.</div>`
@@ -402,6 +430,12 @@ function renderCard(brief: BriefSummaryWithRuns, verdicts: Map<string, string | 
  * this one on its own.
  */
 function missedPanel(missed: MissedThread[]): string {
+  // Nothing to ask means nothing to show. This is a queue of questions, not a
+  // status readout, and a heading followed by "there is nothing here" is a
+  // section that asks to be read and then wastes the reading. Empty is the
+  // normal state, so the normal state is silence.
+  if (missed.length === 0) return "";
+
   return `
     <div class="block">
       <h2 class="section">Did the brief miss these?</h2>
@@ -410,13 +444,8 @@ function missedPanel(missed: MissedThread[]): string {
         mentioning them. Nothing changes until you answer.
       </p>
       ${
-        missed.length === 0
-          ? `<div class="empty" style="padding:1.2rem 0">
-               Nothing to ask about. Everything you have answered lately was either
-               in a brief or arrived after the last one went out.
-             </div>`
-          : missed
-              .map(
+        missed
+          .map(
                 (m) => `
         <div class="missedrow">
           <div>
@@ -479,15 +508,11 @@ export function renderBriefsPage(
       <h1>Briefs</h1>
       <a href="/rules">Rules →</a>
     </header>
-    <div class="sub"><a href="/">← Accounts</a> &nbsp;·&nbsp; What went out, why each item was picked, and what you thought of it.</div>
+    <div class="sub"><a href="/">← Accounts</a></div>
 
     <div class="block">
       <h2 class="section">History</h2>
-      <p class="section-sub">
-        One day at a time, newest first. ${total} day${total === 1 ? "" : "s"} kept;
-        anything older than ${BRIEF_RETENTION_DAYS} days is deleted automatically.
-        Judging an item here is what teaches the ranking.
-      </p>
+      <p class="section-sub">Giving feedback here will teach the AI.</p>
       ${
         briefs.length === 0
           ? `<div class="empty">No briefs yet. One is recorded each morning after delivery.</div>`

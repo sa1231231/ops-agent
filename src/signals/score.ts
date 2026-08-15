@@ -70,10 +70,10 @@ function daysBetween(from: Date, to: Date): number {
 function addressedWeight(candidate: ThreadCandidate): Signal | null {
   const me = candidate.accountEmail.toLowerCase();
   if (candidate.toEmails.includes(me)) {
-    return { name: "addressed-to", points: W.ADDRESSED_TO, detail: "in To:" };
+    return { name: "addressed-to", points: W.ADDRESSED_TO, detail: "addressed to you" };
   }
   if (candidate.ccEmails.includes(me)) {
-    return { name: "addressed-cc", points: W.ADDRESSED_CC, detail: "Cc only" };
+    return { name: "addressed-cc", points: W.ADDRESSED_CC, detail: "you were only Cc'd" };
   }
   return null;
 }
@@ -102,7 +102,7 @@ export function looksAutomated(fromEmail: string | null): string | null {
   const domain = fromEmail.slice(at + 1);
 
   for (const re of W.AUTOMATED_LOCALPARTS) {
-    if (re.test(localPart)) return `sender "${localPart}"`;
+    if (re.test(localPart)) return `sender name "${localPart}" looks automated`;
   }
   for (const re of W.AUTOMATED_DOMAINS) {
     if (re.test(domain)) return `bulk sending domain "${domain}"`;
@@ -142,7 +142,7 @@ export function scoreThread(
       signals.push({
         name: "aging",
         points: aging,
-        detail: `${daysWaiting.toFixed(1)}d unanswered`,
+        detail: `unanswered ${Math.round(daysWaiting)} day${Math.round(daysWaiting) === 1 ? "" : "s"}`,
       });
     }
   }
@@ -163,7 +163,7 @@ export function scoreThread(
     signals.push({
       name: "known-correspondent",
       points: relationship,
-      detail: `he has written to them ${candidate.outboundCount}x`,
+      detail: `you have written to them ${candidate.outboundCount} times`,
     });
   } else {
     // Evidence from his own behaviour, and the main thing separating a person
@@ -171,7 +171,7 @@ export function scoreThread(
     signals.push({
       name: "never-corresponded",
       points: W.NEVER_CORRESPONDED,
-      detail: "he has never written to this address",
+      detail: "you have never written to this address",
     });
   }
 
@@ -191,7 +191,10 @@ export function scoreThread(
     signals.push({
       name: "meeting-soon",
       points: W.MEETING_SOON,
-      detail: `meets ${candidate.meetingSoonAt.toISOString().slice(0, 16)}`,
+      // No timestamp. It was an ISO string, which is unreadable in a sentence,
+      // and formatting one here would drag a timezone into a module that is
+      // deliberately free of them.
+      detail: "you are meeting them soon",
     });
   }
 
@@ -199,7 +202,7 @@ export function scoreThread(
     signals.push({
       name: "met-recently",
       points: W.MET_RECENTLY,
-      detail: "met, nothing sent since",
+      detail: "you met recently and nothing was sent after",
     });
   }
 
@@ -257,7 +260,7 @@ export function scoreThread(
       signals.push({
         name: "automated",
         points: W.AUTOMATED,
-        detail: automatedSender ?? "headers indicate machine-sent",
+        detail: automatedSender ?? "machine sent",
       });
     }
   }
