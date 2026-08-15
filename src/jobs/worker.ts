@@ -55,7 +55,7 @@ export async function runCycle(): Promise<{ syncFailed: string | null }> {
   }
 
   const result = await runBrief(new Date(), { trigger: "scheduled" });
-  console.log(`[worker] brief: ${result.status} — ${result.message}`);
+  console.log(`[worker] brief: ${result.status}, ${result.message}`);
 
   // Read the configured hour, not the env fallback: the gate uses the console
   // setting, and a log line that disagrees with the gate is worse than none.

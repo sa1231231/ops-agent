@@ -111,7 +111,7 @@ export function renderBriefPage(
 
   const priorities = b.priorities.length
     ? `<ol>${b.priorities.map((p) => `<li>${escapeHtml(p)}</li>`).join("")}</ol>`
-    : `<p class="empty">—</p>`;
+    : `<p class="empty">None.</p>`;
 
   return `<!doctype html>
 <html lang="en">
@@ -119,7 +119,7 @@ export function renderBriefPage(
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
-  <title>Brief — ${escapeHtml(localDate)}</title>
+  <title>Brief - ${escapeHtml(localDate)}</title>
   <style>${STYLE}</style>
 </head>
 <body>

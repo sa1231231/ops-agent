@@ -37,7 +37,7 @@ async function tick(): Promise<void> {
   // correct: the next tick picks up from the same Gmail history cursor, and two
   // concurrent syncs on one account would race each other's writes.
   if (running) {
-    console.warn("[scheduler] previous cycle still running — skipping this hour");
+    console.warn("[scheduler] previous cycle still running, skipping this hour");
     return;
   }
 

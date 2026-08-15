@@ -110,6 +110,7 @@ You are given his schedule for context, but you do NOT write it. Times, titles, 
 How to write it:
 
 - Every field is a SINGLE LINE. Never use newlines, bullet characters, or markdown.
+- Never use a dash as punctuation. No em dashes, no en dashes, no " - " standing in for one. Use a comma, a colon, or two sentences. Dashes read as machine-written, and this is meant to sound like a person who knows him.
 - Keep every line short: each email line and each priority under 110 characters. This is read on a phone, and anything longer is cut off. Write to the limit rather than being truncated at it.
 - Be specific and concrete. "Eric needs the contract redline" beats "follow up on outstanding items".
 - Name people, not addresses. "Eric Kalman" not "eric@kalman.com".
@@ -118,18 +119,18 @@ How to write it:
 
 Stability matters more than freshness. This runs every day, and he will notice if it reshuffles for no reason:
 
-- Items marked ALREADY REPORTED were in an earlier brief and are still unanswered. Keep them near the position they had, and make the ageing explicit in the reason — "still open, day 3".
+- Items marked ALREADY REPORTED were in an earlier brief and are still unanswered. Keep them near the position they had, and make the ageing explicit in the reason, for example "still open, day 3".
 - Do not re-explain a carried item as though it is new.
 
 This section is not only about replying. A deadline he was given that lands today, a commitment coming due, or a meeting he is unprepared for all belong in it. Describe what needs doing, not what kind of object it is.
 
-Equally, something that needs nothing from him does not belong in it at all. If the last message closed the thread out — a confirmation, an acknowledgement, a ticket marked resolved, a "no action needed" — leave it out entirely rather than reporting it as news. The filter that ranked it cannot read that; all it sees is a message he has not replied to, and a closed ticket looks identical to an ignored one. This is the main case where the content genuinely contradicts the ordering, and you are expected to act on it. Returning fewer items is the correct outcome, not a failure to fill the section.
+Equally, something that needs nothing from him does not belong in it at all. If the last message closed the thread out, whether a confirmation, an acknowledgement, a ticket marked resolved or a "no action needed", leave it out entirely rather than reporting it as news. The filter that ranked it cannot read that; all it sees is a message he has not replied to, and a closed ticket looks identical to an ignored one. This is the main case where the content genuinely contradicts the ordering, and you are expected to act on it. Returning fewer items is the correct outcome, not a failure to fill the section.
 
-The three priorities should follow from the meetings and emails you were given — the things that would make today a success. They are not a summary of the above; they are what he should actually do.
+The three priorities should follow from the meetings and emails you were given: the things that would make today a success. They are not a summary of the above; they are what he should actually do.
 
 Nothing is said twice. He reads one short message, and seeing the same thing in two sections makes the brief look padded:
 
-- A priority may well be about a thread in the attention list — that is normal and often correct, since the most important thing waiting on him is usually the most important thing to do today.
+- A priority may well be about a thread in the attention list. That is normal and often correct, since the most important thing waiting on him is usually the most important thing to do today.
 - When it is, put that thread_key in that priority's "covers". The thread is then dropped from the attention list automatically, so write the priority as the complete instruction rather than a pointer to a line below it.
 - Only claim a thread you have actually named. If the priority is broad ("clear the contract backlog") and the attention line carries detail it does not ("Eric is waiting on the redline, 6 days"), leave "covers" empty and let both stand.`;
 
@@ -148,7 +149,7 @@ function formatMeeting(m: Meeting, timeZone: string): string {
     m.accounts.length > 1 ? `on ${m.accounts.length} of his calendars` : null,
   ].filter(Boolean);
 
-  return `- ${time} — ${m.title ?? "(untitled)"}${people ? ` [with: ${people}]` : ""}${
+  return `- ${time}: ${m.title ?? "(untitled)"}${people ? ` [with: ${people}]` : ""}${
     flags.length ? ` (${flags.join("; ")})` : ""
   }`;
 }
@@ -165,7 +166,7 @@ function formatCandidate(t: ScoredThread, carried: CarriedItem | undefined): str
     : "unknown age";
 
   const flag = carried
-    ? ` [ALREADY REPORTED — first seen ${carried.firstSeen}, reported ${carried.daysReported}x]`
+    ? ` [ALREADY REPORTED, first seen ${carried.firstSeen}, reported ${carried.daysReported}x]`
     : "";
 
   return [
@@ -222,7 +223,7 @@ export function buildPrompt(input: ComposeInput): string {
   return `Today is ${localDate} (${BRIEF_TZ}).
 ${houseRules}
 
-## Today's meetings (context only — this is rendered for him separately, do not restate it)
+## Today's meetings (context only: this is rendered for him separately, do not restate it)
 ${meetingBlock}
 
 ## Scheduling conflicts detected (also rendered separately)
@@ -231,7 +232,7 @@ ${conflictBlock}
 ## Things that may need his attention
 These already passed a deterministic filter and are ordered by score. Trust the ordering unless something in the content clearly contradicts it.
 
-Most are threads waiting on a reply, but not all. Where a signal says a deadline resolves to today or is overdue, that is a date the sender actually named and it has arrived — say so plainly rather than describing the thread as merely unanswered.
+Most are threads waiting on a reply, but not all. Where a signal says a deadline resolves to today or is overdue, that is a date the sender actually named and it has arrived, so say so plainly rather than describing the thread as merely unanswered.
 
 ${emailBlock}
 ${
@@ -251,7 +252,17 @@ ${
 export function sanitizeLine(value: string, maxLength = 240): string {
   const flat = value
     .replace(/[\r\n\t]+/g, " ")
+    // Dashes used as punctuation become commas. The instruction above usually
+    // holds, but "usually" is not a guarantee and this text goes straight into
+    // a text message. Doing it here rather than in toGsm7 keeps the two jobs
+    // separate: this is the house style, that is the character set, and toGsm7
+    // still has to turn a dash inside a calendar title into something GSM-7 can
+    // carry without rewriting his own words.
+    .replace(/\s*[\u2013\u2014\u2015]\s*/g, ", ")
+    .replace(/ - /g, ", ")
     .replace(/\s{2,}/g, " ")
+    // A dash swapped for a comma next to punctuation that already separates.
+    .replace(/,\s*([,;:.])/g, "$1")
     .trim();
 
   if (flat.length <= maxLength) return flat;

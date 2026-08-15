@@ -291,7 +291,7 @@ export function renderMessagePage(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(title)} — ops-agent</title>
+  <title>${escapeHtml(title)} - ops-agent</title>
   <style>${STYLE}</style>
 </head>
 <body>

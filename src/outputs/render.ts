@@ -40,6 +40,10 @@ export function toGsm7(text: string): string {
   return text
     .replace(/[‘’‛′]/g, "'")
     .replace(/[“”‟″]/g, '"')
+    // A dash the model wrote was already turned into a comma by sanitizeLine.
+    // Anything reaching here came from his own calendar titles, so it is
+    // transliterated rather than rewritten: substituting a comma inside a title
+    // he chose would be editing his words, not enforcing house style.
     .replace(/[–—―]/g, "-")
     .replace(/…/g, "...")
     .replace(/[   ]/g, " ")
@@ -121,7 +125,7 @@ export function conflictLines(conflicts: Conflict[]): string[] {
     const parts = sorted.map(
       (m) => `${meetingTime(m)} ${clip(m.title ?? "(untitled)", CONFLICT_TITLE_MAX)}`,
     );
-    return `${label} - ${parts.join(" / ")}`;
+    return `${label}: ${parts.join(" / ")}`;
   });
 }
 

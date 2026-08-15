@@ -1,10 +1,10 @@
 import { BRIEF_RETENTION_DAYS } from "../config.js";
-import type { BriefSummary } from "../db/queries/briefs.js";
+import type { BriefSummaryWithRuns } from "../db/queries/briefs.js";
 import type { MissedThread, RecordedVerdict } from "../db/queries/rules.js";
 import { formatLocalTime } from "../time.js";
 import { escapeHtml } from "./admin.js";
 import type { LegacyComposed } from "./briefPage.js";
-import { renderWhy, SCORING_STYLE, weightsTable, type SignalLike } from "./scoring.js";
+import { renderWhy, SCORING_STYLE, type SignalLike } from "./scoring.js";
 import {
   isApproval,
   NOT_IMPORTANT_CHOICES,
@@ -25,7 +25,15 @@ import {
  * brief — the same numbers, at the moment they mean something.
  */
 
-export const BRIEFS_PER_PAGE = 10;
+/**
+ * One day per view.
+ *
+ * A scrolling wall of cards pushed everything below it out of sight, and the
+ * question below it - "did the brief miss these" - is the one that needs
+ * answering while the morning is still fresh. Older and Newer under a single
+ * card gets there in one click and keeps the rest of the page reachable.
+ */
+export const BRIEFS_PER_PAGE = 1;
 
 /** A brief's stored scoring snapshot: why each candidate scored what it did. */
 interface ScoringSnapshotRow {
@@ -287,7 +295,7 @@ function verdictIndex(recorded: RecordedVerdict[]): Map<string, string | null> {
   return index;
 }
 
-function renderCard(brief: BriefSummary, verdicts: Map<string, string | null>): string {
+function renderCard(brief: BriefSummaryWithRuns, verdicts: Map<string, string | null>): string {
   const payload = (brief.payload ?? {}) as StoredPayload;
   const c = payload.composed;
 
@@ -342,7 +350,7 @@ function renderCard(brief: BriefSummary, verdicts: Map<string, string | null>): 
                .map((e) => {
                  const row = snapshot.get(e.thread_key);
                  return `<li>${escapeHtml(e.line)}${
-                   e.reason ? ` <span class="why">— ${escapeHtml(e.reason)}</span>` : ""
+                   e.reason ? ` <span class="why">(${escapeHtml(e.reason)})</span>` : ""
                  }${renderWhy(row?.score ?? null, row?.signals ?? [])}${threadControls(
                    brief.id,
                    e.thread_key,
@@ -356,14 +364,16 @@ function renderCard(brief: BriefSummary, verdicts: Map<string, string | null>): 
       ? `<div class="err">${escapeHtml(payload.error)}</div>`
       : `<div class="line" style="opacity:.55">No payload recorded.</div>`;
 
-  const sentTime = brief.sent_at ? formatLocalTime(new Date(brief.sent_at)) : "—";
+  const sentTime = brief.sent_at ? formatLocalTime(new Date(brief.sent_at)) : "not sent";
 
   return `
     <article class="card">
       <div class="card-head">
         <span class="date">${escapeHtml(brief.local_date)}</span>
         <span class="pill ${statusClass(brief.status)}">${escapeHtml(brief.status)}</span>
-        <span class="meta">sent ${escapeHtml(sentTime)}</span>
+        <span class="meta">sent ${escapeHtml(sentTime)}${
+          brief.runsThatDay > 1 ? ` (last of ${brief.runsThatDay} that day)` : ""
+        }</span>
       </div>
       ${body}
       ${
@@ -434,7 +444,7 @@ function missedPanel(missed: MissedThread[]): string {
 }
 
 export function renderBriefsPage(
-  briefs: BriefSummary[],
+  briefs: BriefSummaryWithRuns[],
   requestedPage: number,
   total: number,
   missed: MissedThread[],
@@ -460,7 +470,7 @@ export function renderBriefsPage(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Briefs — ops-agent</title>
+  <title>Briefs - ops-agent</title>
   <style>${STYLE}</style>
 </head>
 <body>
@@ -474,7 +484,8 @@ export function renderBriefsPage(
     <div class="block">
       <h2 class="section">History</h2>
       <p class="section-sub">
-        ${total} brief${total === 1 ? "" : "s"} kept. Older than ${BRIEF_RETENTION_DAYS} days are deleted automatically.
+        One day at a time, newest first. ${total} day${total === 1 ? "" : "s"} kept;
+        anything older than ${BRIEF_RETENTION_DAYS} days is deleted automatically.
         Judging an item here is what teaches the ranking.
       </p>
       ${
@@ -485,23 +496,11 @@ export function renderBriefsPage(
 
       <nav>
         ${prev}${next}
-        <span class="count">page ${page} of ${lastPage}</span>
+        <span class="count">day ${page} of ${lastPage}</span>
       </nav>
     </div>
 
     ${missedPanel(missed)}
-
-    <div class="block">
-      <h2 class="section">Reference</h2>
-      <p class="section-sub">
-        The fixed weights every thread is scored against, before any rule you set.
-        Changing one of these means changing code; everything on this page changes rules instead.
-      </p>
-      <details class="fold">
-        <summary>Current weights</summary>
-        ${weightsTable()}
-      </details>
-    </div>
   </main>
 </body>
 </html>`;

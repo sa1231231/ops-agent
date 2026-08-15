@@ -32,7 +32,7 @@ import type { ComposedBrief } from "../ranking/compose.js";
  */
 
 /** Meta rejects empty parameters, so unused slots carry an em dash. */
-const EMPTY_SLOT = "—";
+const EMPTY_SLOT = "-";
 
 export function buildTemplateVariables(
   brief: ComposedBrief,

@@ -106,7 +106,7 @@ export const PRIORITY_CHOICES: readonly { id: string; label: string; effect: str
   },
   {
     id: "priority-obvious",
-    label: "Obvious — I did not need telling",
+    label: "Obvious, I did not need telling",
     effect: "Recorded against the priorities prompt",
   },
   {

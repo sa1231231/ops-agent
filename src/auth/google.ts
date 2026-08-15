@@ -62,7 +62,7 @@ async function postToken(body: URLSearchParams): Promise<GoogleTokenResponse> {
     // Google's error/description are safe to surface; the token fields are not.
     throw new Error(
       `Google token endpoint ${res.status}: ${json.error ?? "unknown"}` +
-        (json.error_description ? ` — ${json.error_description}` : ""),
+        (json.error_description ? `: ${json.error_description}` : ""),
     );
   }
   return json;

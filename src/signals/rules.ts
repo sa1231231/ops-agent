@@ -136,7 +136,7 @@ export function ruleSignals(
         name: sender.adjustment >= 0 ? "sender-promoted" : "sender-demoted",
         points,
         detail: `${sender.pattern}${
-          sender.reason ? ` — ${sender.reason}` : ""
+          sender.reason ? `, ${sender.reason}` : ""
         } (${sender.confidence} vote${sender.confidence === 1 ? "" : "s"})`,
       });
       fired.push(sender.id);

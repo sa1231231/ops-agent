@@ -176,22 +176,44 @@ export interface BriefSummary {
   payload: unknown;
 }
 
+/**
+ * Days that have a brief, not briefs.
+ *
+ * The unique constraint on `local_date` was dropped so manual sends could be
+ * repeated freely during tuning, which means a day of testing leaves five rows
+ * for one morning. The history reads one day at a time, so it counts and lists
+ * days: the last send of each is the one that went out and stood.
+ */
 export async function countBriefs(): Promise<number> {
   const { rows } = await pool.query<{ n: number }>(
-    "select count(*)::int n from briefs",
+    "select count(distinct local_date)::int n from briefs",
   );
   return rows[0]?.n ?? 0;
+}
+
+export interface BriefSummaryWithRuns extends BriefSummary {
+  /** How many briefs were sent that day. More than one means manual re-runs. */
+  runsThatDay: number;
 }
 
 export async function listBriefs(
   limit: number,
   offset: number,
-): Promise<BriefSummary[]> {
-  const { rows } = await pool.query<BriefSummary>(
-    `select id, local_date::text as local_date, status, sent_at, message_sid,
-            share_token, skipped_accounts, payload
-       from briefs
-      order by local_date desc, id desc
+): Promise<BriefSummaryWithRuns[]> {
+  const { rows } = await pool.query<BriefSummaryWithRuns>(
+    // distinct on picks one row per day; the order by inside decides which,
+    // and must lead with the same expression Postgres is deduplicating on.
+    `with latest as (
+       select distinct on (local_date)
+              id, local_date::text as local_date, status, sent_at, message_sid,
+              share_token, skipped_accounts, payload,
+              (select count(*)::int from briefs b2 where b2.local_date = b.local_date)
+                as "runsThatDay"
+         from briefs b
+        order by local_date desc, id desc
+     )
+     select * from latest
+      order by local_date desc
       limit $1 offset $2`,
     [limit, offset],
   );

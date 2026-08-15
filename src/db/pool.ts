@@ -6,7 +6,7 @@ const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
   throw new Error(
     "DATABASE_URL is not set. Copy .env.example to .env and fill it in.\n" +
-      "Locally this must be Railway's DATABASE_PUBLIC_URL — the private-network " +
+      "Locally this must be Railway's DATABASE_PUBLIC_URL, the private-network " +
       "DATABASE_URL is only reachable from inside Railway.",
   );
 }

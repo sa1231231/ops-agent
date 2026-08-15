@@ -347,10 +347,10 @@ export async function weightSuggestions(): Promise<WeightSuggestion[]> {
         upVotes: up,
         verdict:
           down > up * 3
-            ? `appears in ${down} rejections vs ${up} approvals — consider weakening`
+            ? `appears in ${down} rejections vs ${up} approvals, consider weakening`
             : up > down * 3
-              ? `appears in ${up} approvals vs ${down} rejections — consider strengthening`
-              : `mixed (${up} up, ${down} down) — no clear signal yet`,
+              ? `appears in ${up} approvals vs ${down} rejections, consider strengthening`
+              : `mixed (${up} up, ${down} down), no clear signal yet`,
       };
     })
     .filter((s) => !s.verdict.startsWith("mixed"));

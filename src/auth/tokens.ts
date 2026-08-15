@@ -57,7 +57,7 @@ export async function getAccessToken(accountId: number): Promise<string> {
     throw new TokenRevokedError(
       accountId,
       row.email,
-      "no refresh token stored — reconnect this account",
+      "no refresh token stored, reconnect this account",
     );
   }
 

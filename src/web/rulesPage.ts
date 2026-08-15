@@ -7,6 +7,7 @@ import type {
 import { confidenceScale, effectivePoints } from "../signals/rules.js";
 import { formatLocalDateTime } from "../time.js";
 import { escapeHtml } from "./admin.js";
+import { SCORING_STYLE, weightsTable } from "./scoring.js";
 
 /**
  * Everything the system has learned, in one list.
@@ -75,7 +76,7 @@ const STYLE = `
     border-left: 3px solid #d97706;
     border-radius: 0 8px 8px 0; padding: .7rem .9rem; margin-bottom: .6rem; font-size: .9rem;
   }
-`;
+${SCORING_STYLE}`;
 
 function points(rule: SenderRuleRow): string {
   const effective = effectivePoints(rule);
@@ -106,7 +107,7 @@ function senderTable(rules: SenderRuleRow[]): string {
         }</td>
         <td>${points(r)}</td>
         <td>${r.confidence}</td>
-        <td>${escapeHtml(r.reason ?? "—")}</td>
+        <td>${escapeHtml(r.reason ?? "")}</td>
         <td>${r.timesFired}${
           r.lastFiredAt
             ? `<div class="muted">${escapeHtml(formatLocalDateTime(r.lastFiredAt))}</div>`
@@ -149,7 +150,7 @@ function threadTable(rules: ThreadRuleRow[]): string {
             ? escapeHtml(formatLocalDateTime(r.expiresAt))
             : '<span class="muted">no expiry</span>'
         }</td>
-        <td>${escapeHtml(r.reason ?? "—")}</td>
+        <td>${escapeHtml(r.reason ?? "")}</td>
         <td>
           <form class="inline" method="post" action="/rules/delete">
             <input type="hidden" name="kind" value="thread">
@@ -211,7 +212,7 @@ export function renderRulesPage(
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Rules — ops-agent</title>
+  <title>Rules - ops-agent</title>
   <style>${STYLE}</style>
 </head>
 <body>
@@ -220,23 +221,18 @@ export function renderRulesPage(
       <h1>Rules</h1>
       <a href="/briefs">Briefs →</a>
     </header>
-    <div class="sub">
-      Everything the system has learned, from ${feedbackCount} verdict${feedbackCount === 1 ? "" : "s"}.
-      Every rule adjusts a score — none of them can silence a thread outright.
-    </div>
-
     <div class="block">
-      <h2>Senders</h2>
+      <h2>1. Senders</h2>
       <p class="section-sub">
-        Repeat verdicts raise the vote count, and the applied points scale with it —
-        so one bad morning cannot blacklist a real correspondent, and a young rule
+        Repeat verdicts raise the vote count, and the applied points scale with it,
+        so one bad morning cannot blacklist a real correspondent and a young rule
         stays weak enough for other signals to overrule it.
       </p>
       ${senderTable(senders)}
     </div>
 
     <div class="block">
-      <h2>Threads</h2>
+      <h2>2. Threads</h2>
       <p class="section-sub">
         Mutes expire, deliberately. A conversation handled on a call looks unanswered
         forever; one that comes back to life months later is genuinely new.
@@ -245,31 +241,46 @@ export function renderRulesPage(
     </div>
 
     <div class="block">
-      <h2>Standing instructions</h2>
+      <h2>3. Standing instructions</h2>
       <p class="section-sub">
         Injected into the prompt for things arithmetic cannot express. The least
-        reliable layer — the model usually obeys — so keep it small and push
-        anything that can be a number down into a sender rule instead.
+        reliable layer, since the model usually obeys rather than always, so keep it
+        small and push anything that can be a number down into a sender rule instead.
       </p>
       ${houseTable(house)}
     </div>
 
     <div class="block">
-      <h2>Suggestions</h2>
+      <h2>4. Suggestions</h2>
       <p class="section-sub">
-        Patterns across the verdicts so far. These change nothing on their own;
-        they are a prompt to look, and any weight change is a code change.
+        Patterns across the ${feedbackCount} verdict${feedbackCount === 1 ? "" : "s"} so far.
+        These change nothing on their own; they are a prompt to look, and any weight
+        change is a code change.
       </p>
       ${
         suggestions.length
           ? suggestions
               .map(
                 (s) =>
-                  `<div class="sugg"><code>${escapeHtml(s.signal)}</code> — ${escapeHtml(s.verdict)}</div>`,
+                  `<div class="sugg"><code>${escapeHtml(s.signal)}</code>: ${escapeHtml(s.verdict)}</div>`,
               )
               .join("")
           : `<div class="empty">Not enough verdicts yet. Suggestions need at least five judgements on a signal before they mean anything.</div>`
       }
+    </div>
+
+    <div class="block">
+      <h2>Base weights</h2>
+      <p class="section-sub">
+        What every thread is scored on before any of the four layers above touch it.
+        These are the only numbers on this page you cannot change from this page:
+        editing one means editing code, which is deliberate. The rules above adjust
+        the result, and none of them can silence a thread outright.
+      </p>
+      <details class="fold">
+        <summary>Show the weights</summary>
+        ${weightsTable()}
+      </details>
     </div>
   </main>
 </body>

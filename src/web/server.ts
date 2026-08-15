@@ -145,7 +145,7 @@ async function handleSettingsPost(
         query = "?saved=" + encodeURIComponent('Greeting is now just "Good morning".');
       } else {
         await setSetting(SETTING_KEYS.briefGreetingName, name);
-        query = "?saved=" + encodeURIComponent(`Greeting saved — "Good morning, ${name}".`);
+        query = "?saved=" + encodeURIComponent(`Greeting saved: "Good morning, ${name}".`);
       }
     } else {
       const raw = (form.get(SETTING_KEYS.briefRecipient) ?? "").trim();
@@ -579,7 +579,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const notice: AdminNotice | null = error
       ? { ok: false, message: error }
       : saved === "cleared"
-        ? { ok: true, message: "Recipient cleared — falling back to CLIENT_SMS_NUMBER." }
+        ? { ok: true, message: "Recipient cleared, falling back to CLIENT_SMS_NUMBER." }
         : saved
           ? { ok: true, message: saved === "1" ? "Saved." : saved }
           : null;
@@ -691,7 +691,7 @@ async function main(): Promise<void> {
   server.listen(PORT, HOST, () => {
     console.log(`[web] listening on ${HOST}:${PORT} (${PUBLIC_BASE_URL})`);
     if (HOST === "127.0.0.1") {
-      console.log(`[web] loopback only — tunnel in with: ssh -L ${PORT}:localhost:${PORT} <user>@<host>`);
+      console.log(`[web] loopback only, tunnel in with: ssh -L ${PORT}:localhost:${PORT} <user>@<host>`);
     }
   });
 }

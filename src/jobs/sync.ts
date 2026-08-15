@@ -212,7 +212,7 @@ if (isEntrypoint) {
     .then(async (summary) => {
       const seconds = ((Date.now() - started) / 1000).toFixed(1);
       console.log(
-        `[sync] done in ${seconds}s — ${summary.synced.length} synced, ` +
+        `[sync] done in ${seconds}s: ${summary.synced.length} synced, ` +
           `${summary.skipped.length} skipped`,
       );
       for (const s of summary.skipped) console.error(`[sync] skipped ${s.email}: ${s.reason}`);

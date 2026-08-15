@@ -42,7 +42,7 @@ describe("only genuine double-bookings reach the message", () => {
     const b = meeting(9, 15, "Client call");
     const [line, ...rest] = conflictLines([overlap(a, b)]);
     assert.equal(rest.length, 0, "one conflict, one line");
-    assert.match(line ?? "", /^Double-booked - 9:00 AM cdp standup \/ 9:15 AM Client call$/);
+    assert.match(line ?? "", /^Double-booked: 9:00 AM cdp standup \/ 9:15 AM Client call$/);
   });
 
   it("collapses a triple booking into one line, not three pairs", () => {
@@ -54,7 +54,7 @@ describe("only genuine double-bookings reach the message", () => {
     const lines = conflictLines([overlap(a, b), overlap(a, c), overlap(b, c)]);
 
     assert.equal(lines.length, 1, `expected one clustered line, got ${lines.length}`);
-    assert.match(lines[0] ?? "", /^Triple-booked - /);
+    assert.match(lines[0] ?? "", /^Triple-booked: /);
     for (const title of ["Standup", "Client call", "Vendor sync"]) {
       assert.ok(lines[0]?.includes(title), `missing ${title}`);
     }
@@ -204,6 +204,31 @@ describe("the rendered message", () => {
     );
     assert.doesNotMatch(text, /NEEDS ATTENTION/, "an empty header is noise");
     assert.match(text, /PRIORITIES/);
+  });
+
+  it("never sends a dash used as punctuation", () => {
+    // He reads a dash as machine-written, and it is the single clearest tell.
+    // sanitizeLine turns the model's into commas; this is the guarantee at the
+    // other end of the pipeline, over the whole assembled message.
+    const text = renderPlainText(
+      {
+        emails: [{ thread_key: "1:a", line: "Eric is waiting, 6 days", reason: "x" }],
+        priorities: ["Send Dubravka one reply covering all three links"],
+      },
+      {
+        localDate: "2026-08-14",
+        skippedAccounts: [],
+        meetings: ["9:00 AM  Standup"],
+        conflicts: conflictLines([
+          overlap(meeting(9, 0, "cdp standup"), meeting(9, 15, "Client call")),
+        ]),
+        greetingName: "Payeman",
+      },
+    );
+
+    assert.doesNotMatch(text, /[\u2013\u2014\u2015]/, "an em or en dash reached the message");
+    assert.doesNotMatch(text, / - /, "a spaced hyphen reads the same way");
+    assert.match(text, /Double-booked: 9:00 AM cdp standup/, "hyphenated words are fine");
   });
 
   it("carries no link", () => {

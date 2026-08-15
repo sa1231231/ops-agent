@@ -89,7 +89,7 @@ async function runMigrations(): Promise<void> {
   console.log(
     ran === 0
       ? `[migrate] up to date (${files.length} migration(s), nothing to apply)`
-      : `[migrate] done — applied ${ran} migration(s)`,
+      : `[migrate] done: applied ${ran} migration(s)`,
   );
 }
 

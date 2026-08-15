@@ -250,7 +250,7 @@ export function scoreThread(
     signals.push({
       name: "notification-relay",
       points: W.NOTIFICATION_RELAY,
-      detail: `${relay} — the conversation lives in that app`,
+      detail: `${relay}, the conversation lives in that app`,
     });
   } else {
     if (candidate.isAutomated || automatedSender) {

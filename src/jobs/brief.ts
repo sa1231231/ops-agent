@@ -86,7 +86,7 @@ export async function runBrief(
   // deployment where nobody has opened the console yet.
   const targetHour = await briefHour(BRIEF_HOUR);
   if (!force && localHour(now) !== targetHour) {
-    const message = `Not ${targetHour}:00 local (it is ${localHour(now)}:00) — nothing to do`;
+    const message = `Not ${targetHour}:00 local (it is ${localHour(now)}:00), nothing to do`;
     console.log(`[brief] ${message}`);
     return { status: "not-due", message };
   }
@@ -95,7 +95,7 @@ export async function runBrief(
   // schedulers — an in-process one and a platform cron — from both sending.
   // Manual runs are unaffected, deliberately.
   if (trigger === "scheduled" && !dryRun && (await scheduledSendExists(localDate))) {
-    const message = `Already sent on schedule for ${localDate} — nothing to do`;
+    const message = `Already sent on schedule for ${localDate}, nothing to do`;
     console.log(`[brief] ${message}`);
     return { status: "already-sent", message };
   }
@@ -155,10 +155,10 @@ export async function runBrief(
 
     if (dryRun) {
       console.log("\n----- DRY RUN, not sending -----\n" + text + "\n--------------------------------\n");
-      console.log("[brief] dry run — nothing claimed, nothing recorded");
+      console.log("[brief] dry run, nothing claimed, nothing recorded");
       return {
         status: "preview",
-        message: `Preview for ${localDate} — ${candidates.length} candidates, nothing sent or recorded`,
+        message: `Preview for ${localDate}: ${candidates.length} candidates, nothing sent or recorded`,
         text,
       };
     }
@@ -181,7 +181,7 @@ export async function runBrief(
         }),
       );
     } else {
-      console.log("[brief] DELIVERY_CHANNEL=none — rendered and stored, not sent");
+      console.log("[brief] DELIVERY_CHANNEL=none, rendered and stored, not sent");
     }
 
     // Carry-over depends on these rows: tomorrow's "still open, day 2" is only
@@ -233,7 +233,7 @@ export async function runBrief(
     const pruned = await pruneOldBriefs(BRIEF_RETENTION_DAYS);
     if (pruned > 0) console.log(`[brief] pruned ${pruned} brief(s) past retention`);
 
-    console.log(`[brief] done — ${briefUrl}${messageSid ? ` (sid ${messageSid})` : ""}`);
+    console.log(`[brief] done: ${briefUrl}${messageSid ? ` (sid ${messageSid})` : ""}`);
 
     return {
       status: "sent",
