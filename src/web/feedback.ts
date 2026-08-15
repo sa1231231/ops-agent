@@ -38,7 +38,11 @@ export const NOT_IMPORTANT_CHOICES: readonly FeedbackChoice[] = [
   },
   {
     id: "thread-handled",
-    label: "Already dealt with — call, text, in person",
+    // Broader than it started. It was "dealt with by call, text, in person",
+    // which named one cause and quietly excluded the commoner one: a thread that
+    // simply needs nothing — a closed ticket, an acknowledgement, an FYI. Both
+    // want the same outcome, which is for that conversation to stop asking.
+    label: "Handled, or needs nothing from me",
     effect: "Hides this one conversation for 30 days",
     verdict: "not-important",
   },

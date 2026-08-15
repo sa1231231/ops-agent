@@ -5,7 +5,7 @@ import {
   markAccountError,
   type Account,
 } from "../db/queries/accounts.js";
-import { upsertEvents, pruneEventsOutsideWindow } from "../db/queries/events.js";
+import { reconcileEvents, upsertEvents } from "../db/queries/events.js";
 import {
   deleteMessages,
   insertMessages,
@@ -124,14 +124,25 @@ async function syncCalendar(account: Account, token: string): Promise<void> {
     const calendarIds = await listCalendarIds(token);
     const now = new Date();
     let total = 0;
+    const seen: string[] = [];
 
     for (const calendarId of calendarIds) {
       const events = await fetchEvents(token, calendarId, now);
       total += await upsertEvents(account.id, events);
+      seen.push(...events.map((e) => e.gcalEventId));
     }
 
+    // Reconciled once, after every calendar, never inside the loop: pruning per
+    // calendar would delete the rows the previous calendar just wrote.
+    //
+    // Skipped entirely when no calendar was listed. An empty result there means
+    // he has no calendars or the listing failed, and the two are
+    // indistinguishable here — deleting his whole schedule on the strength of a
+    // bad API response is a worse failure than briefing one stale meeting.
     const { timeMin, timeMax } = calendarWindow(now);
-    const pruned = await pruneEventsOutsideWindow(account.id, timeMin, timeMax);
+    const pruned = calendarIds.length
+      ? await reconcileEvents(account.id, timeMin, timeMax, seen)
+      : 0;
 
     return {
       result: null,

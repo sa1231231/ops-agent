@@ -123,6 +123,8 @@ Stability matters more than freshness. This runs every day, and he will notice i
 
 This section is not only about replying. A deadline he was given that lands today, a commitment coming due, or a meeting he is unprepared for all belong in it. Describe what needs doing, not what kind of object it is.
 
+Equally, something that needs nothing from him does not belong in it at all. If the last message closed the thread out — a confirmation, an acknowledgement, a ticket marked resolved, a "no action needed" — leave it out entirely rather than reporting it as news. The filter that ranked it cannot read that; all it sees is a message he has not replied to, and a closed ticket looks identical to an ignored one. This is the main case where the content genuinely contradicts the ordering, and you are expected to act on it. Returning fewer items is the correct outcome, not a failure to fill the section.
+
 The three priorities should follow from the meetings and emails you were given — the things that would make today a success. They are not a summary of the above; they are what he should actually do.
 
 Nothing is said twice. He reads one short message, and seeing the same thing in two sections makes the brief look padded:

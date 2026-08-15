@@ -72,21 +72,37 @@ export async function upsertEvents(
 }
 
 /**
- * Drops events that fell out of the sync window.
+ * Reconciles the stored window against what Google just returned.
  *
- * Without this, an event cancelled or moved after we stored it would linger and
- * show up in a brief as a meeting that is not happening.
+ * Upserting alone can only ever add and update. An event he deletes stops coming
+ * back in the response, so nothing touches its row again and it briefs him
+ * forever as a meeting that is not happening — which is exactly what a deleted
+ * 5pm block did: every other row carried today's `updated_at` and that one still
+ * carried yesterday's.
+ *
+ * An earlier version deleted only rows whose `starts_at` had fallen outside the
+ * window, which catches a meeting moved to next month and nothing else. The
+ * common case is a meeting deleted *in place*, still sitting inside the window.
+ *
+ * So the rule is: after a successful pass over every calendar, the stored window
+ * is exactly what Google returned. That covers deletion, cancellation, a decline
+ * after the fact, and a meeting moved out — without needing to know which
+ * happened.
  */
-export async function pruneEventsOutsideWindow(
+export async function reconcileEvents(
   accountId: number,
   timeMin: Date,
   timeMax: Date,
+  seenEventIds: string[],
 ): Promise<number> {
   const { rowCount } = await pool.query(
     `delete from events
       where account_id = $1
-        and (starts_at is null or starts_at < $2 or starts_at >= $3)`,
-    [accountId, timeMin, timeMax],
+        and (
+          starts_at is null or starts_at < $2 or starts_at >= $3
+          or not (gcal_event_id = any($4::text[]))
+        )`,
+    [accountId, timeMin, timeMax, seenEventIds],
   );
   return rowCount ?? 0;
 }
