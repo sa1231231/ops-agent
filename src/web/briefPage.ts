@@ -95,8 +95,15 @@ export function renderBriefPage(
     ? `<ol>${b.emails
         .map(
           (e) =>
+            // Kept visible even when the message left it out, because this page
+            // is the full record. Marked, so "it is here and not in my text" is
+            // an answer rather than a discrepancy.
             `<li>${escapeHtml(e.line)}${
               e.reason ? `<span class="why">${escapeHtml(e.reason)}</span>` : ""
+            }${
+              e.coveredByPriority
+                ? `<span class="why">covered by a priority above; not repeated in the message</span>`
+                : ""
             }</li>`,
         )
         .join("")}</ol>`

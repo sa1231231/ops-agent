@@ -22,8 +22,25 @@ const MODEL = "claude-opus-5";
  * model only handles the two things that need judgement.
  */
 export interface ComposedBrief {
-  emails: Array<{ thread_key: string; line: string; reason: string }>;
+  emails: Array<{
+    thread_key: string;
+    line: string;
+    reason: string;
+    /**
+     * A priority already says this. Kept in the list rather than deleted,
+     * because carry-over is built from `brief_items` and a thread reported as a
+     * priority was still reported — dropping the row here would make it read as
+     * new tomorrow. The renderer skips it; the brief page still shows it.
+     */
+    coveredByPriority?: boolean;
+  }>;
   priorities: string[];
+}
+
+/** What the model returns, before coverage is resolved into a flag. */
+interface RawComposed {
+  emails: Array<{ thread_key: string; line: string; reason: string }>;
+  priorities: Array<{ priority: string; covers: string[] }>;
 }
 
 const OUTPUT_SCHEMA = {
@@ -61,7 +78,23 @@ const OUTPUT_SCHEMA = {
     priorities: {
       type: "array",
       description: "Exactly three priorities for today, each one line.",
-      items: { type: "string" },
+      items: {
+        type: "object",
+        properties: {
+          priority: { type: "string", description: "One line. Under 110 characters." },
+          covers: {
+            type: "array",
+            description:
+              "thread_keys from the attention list that this priority already deals " +
+              "with by name, so they are not repeated below it. Empty for a priority " +
+              "that is not about a specific thread. Only list a thread_key if reading " +
+              "the attention line afterwards would tell him nothing new.",
+            items: { type: "string" },
+          },
+        },
+        required: ["priority", "covers"],
+        additionalProperties: false,
+      },
     },
   },
   required: ["emails", "priorities"],
@@ -90,7 +123,13 @@ Stability matters more than freshness. This runs every day, and he will notice i
 
 This section is not only about replying. A deadline he was given that lands today, a commitment coming due, or a meeting he is unprepared for all belong in it. Describe what needs doing, not what kind of object it is.
 
-The three priorities should follow from the meetings and emails you were given — the things that would make today a success. They are not a summary of the above; they are what he should actually do.`;
+The three priorities should follow from the meetings and emails you were given — the things that would make today a success. They are not a summary of the above; they are what he should actually do.
+
+Nothing is said twice. He reads one short message, and seeing the same thing in two sections makes the brief look padded:
+
+- A priority may well be about a thread in the attention list — that is normal and often correct, since the most important thing waiting on him is usually the most important thing to do today.
+- When it is, put that thread_key in that priority's "covers". The thread is then dropped from the attention list automatically, so write the priority as the complete instruction rather than a pointer to a line below it.
+- Only claim a thread you have actually named. If the priority is broad ("clear the contract backlog") and the attention line carries detail it does not ("Eric is waiting on the redline, 6 days"), leave "covers" empty and let both stand.`;
 
 function formatMeeting(m: Meeting, timeZone: string): string {
   const time = m.allDay
@@ -246,12 +285,22 @@ export async function composeBrief(input: ComposeInput): Promise<ComposedBrief> 
     throw new Error("Model returned no text block");
   }
 
-  const parsed = JSON.parse(text.text) as ComposedBrief;
+  const parsed = JSON.parse(text.text) as RawComposed;
 
   // The schema cannot express item counts, and template slots are fixed, so the
   // shape is enforced here rather than trusted.
   const knownKeys = new Set(
     input.candidates.map((t) => `${t.candidate.accountId}:${t.candidate.gmailThreadId}`),
+  );
+
+  const priorities = (parsed.priorities ?? []).slice(0, 3);
+
+  // Deduplication is resolved here, deterministically, rather than left to the
+  // instruction alone. The model declares which threads a priority already
+  // covers; this decides what that means. A claim on a thread that was never a
+  // candidate is ignored, exactly like a hallucinated thread_key below.
+  const covered = new Set(
+    priorities.flatMap((p) => p.covers ?? []).filter((key) => knownKeys.has(key)),
   );
 
   return {
@@ -263,7 +312,8 @@ export async function composeBrief(input: ComposeInput): Promise<ComposedBrief> 
         thread_key: e.thread_key,
         line: sanitizeLine(e.line, 110),
         reason: sanitizeLine(e.reason, 60),
+        coveredByPriority: covered.has(e.thread_key),
       })),
-    priorities: (parsed.priorities ?? []).slice(0, 3).map((p) => sanitizeLine(p, 130)),
+    priorities: priorities.map((p) => sanitizeLine(p.priority ?? "", 130)).filter(Boolean),
   };
 }

@@ -47,7 +47,8 @@ export function buildTemplateVariables(
 ): Record<string, string> {
   const slot = (value: string | undefined) => (value && value.trim() ? value : EMPTY_SLOT);
 
-  const emails = brief.emails.slice(0, 3);
+  // Same rule as the SMS layout: what a priority already covers is not repeated.
+  const emails = brief.emails.filter((e) => !e.coveredByPriority).slice(0, 3);
   const skipped = opts.skippedAccounts.length
     ? `⚠️ Skipped: ${opts.skippedAccounts.join(", ")}`
     : EMPTY_SLOT;

@@ -164,6 +164,48 @@ describe("the rendered message", () => {
     assert.match(render({ skippedAccounts: ["ops@acme.com"] }), /Could not read: ops@acme\.com/);
   });
 
+  it("does not repeat an item a priority already covered", () => {
+    // He noticed this on a real brief: the same thing read once as a priority
+    // and again three lines later. Saying it twice makes a short message look
+    // padded, which is worse than it being short.
+    const text = renderPlainText(
+      {
+        ...brief,
+        emails: [
+          { ...brief.emails[0]!, coveredByPriority: true },
+          brief.emails[1]!,
+        ],
+      },
+      {
+        localDate: "2026-08-14",
+        skippedAccounts: [],
+        meetings: [],
+        conflicts: [],
+        greetingName: "Payeman",
+      },
+    );
+
+    assert.doesNotMatch(text, /Hetzner needs a cause statement/);
+    assert.match(text, /Send the cause statement/, "the priority still says it");
+    // What is left renumbers from 1 rather than leaving a hole where it was.
+    assert.match(text, /NEEDS ATTENTION\n1\. Dubravka is waiting on a reply/);
+  });
+
+  it("drops the section entirely when every item was covered", () => {
+    const text = renderPlainText(
+      { ...brief, emails: brief.emails.map((e) => ({ ...e, coveredByPriority: true })) },
+      {
+        localDate: "2026-08-14",
+        skippedAccounts: [],
+        meetings: [],
+        conflicts: [],
+        greetingName: "Payeman",
+      },
+    );
+    assert.doesNotMatch(text, /NEEDS ATTENTION/, "an empty header is noise");
+    assert.match(text, /PRIORITIES/);
+  });
+
   it("carries no link", () => {
     // The brief page still exists and the console still links to it; the
     // message is meant to stand alone rather than spend a segment on a URL.

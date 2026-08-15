@@ -200,7 +200,7 @@ Survivors need `MIN_SCORE_FOR_BRIEF` (25); at most `MAX_CANDIDATES` (50) reach t
 
 ### The model call
 
-One call to `claude-opus-5`. Adaptive thinking (on by default on Opus 5), `effort: "high"`, structured output via `output_config.format` with a JSON schema returning `{ emails[{thread_key, line, reason}], priorities[3] }`. A deterministic renderer maps that JSON into the message and the HTML brief page — **the model never formats the message**.
+One call to `claude-opus-5`. Adaptive thinking (on by default on Opus 5), `effort: "high"`, structured output via `output_config.format` with a JSON schema returning `{ emails[{thread_key, line, reason}], priorities[3]{priority, covers[]} }`. A deterministic renderer maps that JSON into the message and the HTML brief page — **the model never formats the message**.
 
 > `temperature` is **removed** on Opus 5 (sending it returns a 400). Stability comes from the deterministic prefilter, deterministic tie-breaks, the fixed output schema, and carry-over — not from a sampling knob.
 
@@ -375,6 +375,12 @@ Schedule first because it is fixed and time-bound; priorities next because they 
 **Only real double-bookings reach the message.** `findConflicts` still detects back-to-backs and the model still sees them, but they are filtered out of `conflictLines()` — his standups butt against each other every morning, so a "no gap" line fired daily and taught him to skip the section. Overlaps are grouped into clusters rather than listed pairwise, because a triple booking produces three pairs and three lines describing one problem reads as three problems.
 
 **Every numbered item gets a blank line after it**, in both sections. They wrap on a phone, and without the separation a run of wrapped items reads as one paragraph — the thing this layout exists to avoid. `renderPlainText` collapses `\n{3,}` to `\n\n`, so the per-item blanks and the section separators never compound into a gap.
+
+**Nothing is said twice.** The most important thing waiting on him is usually also the most important thing to do today, so priorities and needs-attention were reporting the same item three lines apart — which makes a short message look padded.
+
+Deduplication is structural rather than an instruction the model is trusted to follow. Each priority returns a `covers[]` of thread_keys it already deals with by name; `composeBrief` resolves those into a `coveredByPriority` flag (ignoring any key that was never a candidate, exactly like a hallucinated `thread_key`), and `renderPlainText` filters them out and renumbers what is left. The prompt's part is only the judgement call: claim a thread when the priority names it specifically enough that the line below would add nothing, leave `covers` empty when the attention line carries detail the priority does not.
+
+**The covered item is flagged, never deleted.** It stays in `composed.emails`, so `saveBriefItems` still records it and carry-over still knows it was reported — dropping the row would make it read as new tomorrow. The brief page still lists it, marked, so "it is on the page and not in my text" has an answer.
 
 **"Needs attention", not "needs a reply".** Most items are unanswered threads, but not all: a deadline he was given that lands today, a commitment coming due, a meeting he is unprepared for. Naming the section after one of its cases was quietly narrowing what could go in it.
 

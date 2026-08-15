@@ -167,7 +167,14 @@ export function renderPlainText(
     });
   }
 
-  if (brief.emails.length > 0) {
+  // Anything a priority already spelled out is dropped rather than restated.
+  // The two sections are read seconds apart, and the same item appearing in
+  // both is the message looking padded — which is worse than it looking short.
+  // The item is not lost: it is still recorded in `brief_items` so carry-over
+  // stays correct, and still listed on the brief page.
+  const attention = brief.emails.filter((e) => !e.coveredByPriority);
+
+  if (attention.length > 0) {
     lines.push("NEEDS ATTENTION");
     // Deliberately not "needs a reply". Plenty of what belongs here is not a
     // reply at all: a deadline he was given that lands today, a commitment he
@@ -177,7 +184,7 @@ export function renderPlainText(
     // `reason` is still composed and still stored — carry-over, the brief page,
     // and the history all use it. It just does not go in the message: "unanswered
     // 4 days, deadline today" restated what the line above already said.
-    brief.emails.forEach((e, i) => {
+    attention.forEach((e, i) => {
       lines.push(`${i + 1}. ${e.line}`);
       lines.push("");
     });
