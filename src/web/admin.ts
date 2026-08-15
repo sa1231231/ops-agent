@@ -294,7 +294,9 @@ export function renderAccountsPage(
           lines. Clear it once, after the new accounts are connected.
         </p>
         <p class="hint">
-          Standing instructions on the rules page are kept. This cannot be undone.
+          Clears verdicts, sender and thread rules, every past brief, and any
+          account already disconnected. Connected accounts and the standing
+          instructions on the rules page are kept. This cannot be undone.
         </p>
         <form method="post" action="/accounts/reset">
           <div class="row">

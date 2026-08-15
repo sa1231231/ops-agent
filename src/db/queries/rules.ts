@@ -508,6 +508,7 @@ export interface ResetCounts {
   senderRules: number;
   threadRules: number;
   briefs: number;
+  accounts: number;
 }
 
 /**
@@ -545,6 +546,14 @@ export async function resetLearnedState(): Promise<ResetCounts> {
     const threadRules = await wipe("delete from thread_rules");
     const briefs = await wipe("delete from briefs");
 
-    return { feedback, senderRules, threadRules, briefs };
+    // Disconnected accounts are kept normally, so the console remembers what
+    // was once connected and a reconnect is an ordinary upsert. After a
+    // handover that record is just the previous person's addresses sitting in
+    // a list belonging to someone else. Their mail is already gone; this drops
+    // the name too. Connected accounts are untouched, so running this after the
+    // new mailboxes are attached does not disturb them.
+    const accounts = await wipe("delete from accounts where status = 'disabled'");
+
+    return { feedback, senderRules, threadRules, briefs, accounts };
   });
 }

@@ -519,8 +519,9 @@ async function handleResetPost(
     `Cleared ${counts.feedback} verdict${counts.feedback === 1 ? "" : "s"}, ` +
     `${counts.senderRules} sender rule${counts.senderRules === 1 ? "" : "s"}, ` +
     `${counts.threadRules} thread rule${counts.threadRules === 1 ? "" : "s"}, ` +
-    `and ${counts.briefs} brief${counts.briefs === 1 ? "" : "s"}. ` +
-    `Standing instructions kept.`;
+    `${counts.briefs} brief${counts.briefs === 1 ? "" : "s"}, ` +
+    `and ${counts.accounts} disconnected account${counts.accounts === 1 ? "" : "s"}. ` +
+    `Standing instructions and connected accounts kept.`;
   res.writeHead(303, { Location: `/?saved=${encodeURIComponent(note)}` });
   res.end();
 }
