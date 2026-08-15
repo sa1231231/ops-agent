@@ -101,6 +101,12 @@ const STYLE = `
     border: 0; border-radius: 6px; background: CanvasText; color: Canvas; cursor: pointer;
   }
   .hint { font-size: .78rem; opacity: .5; margin: .55rem 0 0; max-width: 52ch; }
+  details.danger > summary {
+    cursor: pointer; font-size: .82rem; opacity: .55; font-weight: 600;
+  }
+  details.danger > summary:hover { opacity: .9; }
+  details.danger .row { margin-top: .7rem; }
+  details.danger button { background: #b91c1c; color: #fff; }
   .ok-note { font-size: .82rem; color: #15803d; margin: .55rem 0 0; }
   @media (prefers-color-scheme: dark) { .ok-note { color: #4ade80; } }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .95em; }
@@ -276,6 +282,28 @@ export function renderAccountsPage(
       </form>
     </section>
     ${jobSection}
+    <section class="settings">
+      <details class="danger">
+        <summary>Handing these mailboxes to someone else</summary>
+        <p class="hint">
+          Disconnecting an account erases the mail and calendar read from it, but
+          not what the system learned. Rules, verdicts, and past briefs outlive a
+          disconnect on purpose, so reconnecting an account keeps its tuning.
+          When the mailboxes change hands that is wrong: the rules were learned
+          from someone else's contacts, and past briefs still hold their subject
+          lines. Clear it once, after the new accounts are connected.
+        </p>
+        <p class="hint">
+          Standing instructions on the rules page are kept. This cannot be undone.
+        </p>
+        <form method="post" action="/accounts/reset">
+          <div class="row">
+            <input type="text" name="confirm" placeholder="Type reset" autocomplete="off">
+            <button type="submit">Clear learned data</button>
+          </div>
+        </form>
+      </details>
+    </section>
   </main>
 </body>
 </html>`;

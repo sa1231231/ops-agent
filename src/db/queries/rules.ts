@@ -1,4 +1,4 @@
-import { pool } from "../pool.js";
+import { pool, withTransaction } from "../pool.js";
 import type { RuleSet, SenderRule, ThreadRule } from "../../signals/rules.js";
 import * as W from "../../signals/weights.js";
 
@@ -500,4 +500,51 @@ export async function missedThreads(limit = 10): Promise<MissedThread[]> {
     accountEmail: r.account_email,
     repliedAt: r.replied_at,
   }));
+}
+
+/** What a handover erased, for the confirmation message. */
+export interface ResetCounts {
+  feedback: number;
+  senderRules: number;
+  threadRules: number;
+  briefs: number;
+}
+
+/**
+ * Erases everything the system has learned, and every brief it has sent.
+ *
+ * This exists for one situation: the mailboxes are changing hands.
+ * Disconnecting an account already erases what was read from it, but the
+ * *judgements* survive that, and they have to. A rule is supposed to outlive a
+ * reconnect, which is the whole reason a mute still applies after an auth
+ * expiry.
+ *
+ * When a different person's mail arrives behind the same install, that
+ * durability turns into the bug. Rules learned from one person's correspondents
+ * are not stale, they are wrong: a global sender rule demoting a vendor nobody
+ * writes to any more still fires, and a domain rule fires on a domain the two
+ * people happen to share. Sent briefs are worse than wrong, because their
+ * payloads hold the previous mailbox's subject lines and the console renders
+ * them for thirty days to whoever is looking at it now.
+ *
+ * `brief_rules` is deliberately left alone. Those are typed house style, "keep
+ * it short", "no dashes", not anything learned about a person, and they are the
+ * one part of the tuning that should transfer.
+ *
+ * One transaction: a half-cleared install would score new mail against a rump
+ * of the old one, which is the exact failure this is meant to prevent.
+ */
+export async function resetLearnedState(): Promise<ResetCounts> {
+  return withTransaction(async (client) => {
+    const wipe = async (sql: string): Promise<number> =>
+      (await client.query(sql)).rowCount ?? 0;
+
+    // brief_items cascades from briefs, so it is not listed.
+    const feedback = await wipe("delete from feedback");
+    const senderRules = await wipe("delete from sender_rules");
+    const threadRules = await wipe("delete from thread_rules");
+    const briefs = await wipe("delete from briefs");
+
+    return { feedback, senderRules, threadRules, briefs };
+  });
 }

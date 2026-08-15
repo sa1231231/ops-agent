@@ -42,6 +42,7 @@ import {
   recordFeedback,
   setThreadRule,
   upsertSenderRule,
+  resetLearnedState,
   weightSuggestions,
   type Verdict,
 } from "../db/queries/rules.js";
@@ -487,13 +488,50 @@ async function handleDisconnectPost(
   res.end();
 }
 
+/**
+ * Clears everything learned, for a handover to a different person's mailboxes.
+ *
+ * Gated on typing the word, because it is the only irreversible button here and
+ * the feedback corpus cannot be rebuilt from anything else. A misclick that
+ * erases months of tuning is not recoverable by reconnecting.
+ */
+async function handleResetPost(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  if (!sameOrigin(req)) {
+    res.writeHead(403, { "Content-Type": "text/plain" });
+    res.end("Cross-origin form posts are refused\n");
+    return;
+  }
+
+  const form = await readFormBody(req);
+  if ((form.get("confirm") ?? "").trim().toLowerCase() !== "reset") {
+    res.writeHead(303, {
+      Location: "/?error=" + encodeURIComponent('Type "reset" to confirm.'),
+    });
+    res.end();
+    return;
+  }
+
+  const counts = await resetLearnedState();
+  const note =
+    `Cleared ${counts.feedback} verdict${counts.feedback === 1 ? "" : "s"}, ` +
+    `${counts.senderRules} sender rule${counts.senderRules === 1 ? "" : "s"}, ` +
+    `${counts.threadRules} thread rule${counts.threadRules === 1 ? "" : "s"}, ` +
+    `and ${counts.briefs} brief${counts.briefs === 1 ? "" : "s"}. ` +
+    `Standing instructions kept.`;
+  res.writeHead(303, { Location: `/?saved=${encodeURIComponent(note)}` });
+  res.end();
+}
+
 async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url ?? "/", PUBLIC_BASE_URL);
   const path = url.pathname;
 
   if (req.method === "POST") {
     const postPaths = [
-      "/settings", "/run", "/accounts/disconnect",
+      "/settings", "/run", "/accounts/disconnect", "/accounts/reset",
       "/feedback", "/rules/house", "/rules/delete",
     ];
     if (!postPaths.includes(path)) {
@@ -513,6 +551,8 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       await handleRulesPost(path, req, res);
     } else if (path === "/accounts/disconnect") {
       await handleDisconnectPost(req, res);
+    } else if (path === "/accounts/reset") {
+      await handleResetPost(req, res);
     } else {
       await handleRunPost(req, res);
     }

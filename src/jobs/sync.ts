@@ -1,4 +1,4 @@
-import { getAccessToken, TokenRevokedError } from "../auth/tokens.js";
+import { getAccessToken } from "../auth/tokens.js";
 import { pool } from "../db/pool.js";
 import {
   listAccounts,
@@ -20,6 +20,7 @@ import {
   type SyncSource,
 } from "../db/queries/syncRuns.js";
 import { calendarWindow, fetchEvents, listCalendarIds } from "../sources/calendar.js";
+import { mapWithConcurrency } from "../sources/googleApi.js";
 import {
   fetchColdStartInbox,
   fetchIncremental,
@@ -163,42 +164,50 @@ export interface SyncSummary {
   skipped: Array<{ email: string; reason: string }>;
 }
 
+/**
+ * How many accounts sync at once.
+ *
+ * Not all of them. Each account already fans out ten concurrent Gmail requests
+ * internally, so an unbounded outer loop multiplies: fifteen accounts meant a
+ * hundred and fifty requests in flight, against a Postgres pool of five with a
+ * ten-second checkout timeout. The cold start is the worst moment for it, since
+ * that is when every account is writing hundreds of rows at once, and the
+ * failure mode is the ugly kind: accounts timing out waiting for a connection
+ * and getting marked broken when nothing is actually wrong with them.
+ *
+ * Four leaves a spare connection for whatever else the worker is doing, and the
+ * wall-clock cost is small because the time here is spent waiting on Google.
+ */
+const ACCOUNT_CONCURRENCY = 4;
+
 export async function syncAll(): Promise<SyncSummary> {
   const accounts = (await listAccounts()).filter((a) => a.status !== "disabled");
 
-  // allSettled, not all: one rejection must not cancel the others.
-  const settled = await Promise.allSettled(
-    accounts.map(async (account) => {
+  // Every task resolves, including the failures: one dead account is a row in
+  // the summary, never something that cancels the other fourteen.
+  const outcomes = await mapWithConcurrency(
+    accounts,
+    ACCOUNT_CONCURRENCY,
+    async (account): Promise<{ email: string; reason?: string }> => {
       try {
         await syncAccount(account);
-        return account.email;
+        return { email: account.email };
       } catch (err) {
-        if (err instanceof TokenRevokedError) {
-          // Not retryable — a human must reconnect this account. Record it so
-          // the console shows why, and so the brief can name it as skipped.
-          await markAccountError(account.id, errorText(err));
-        } else {
-          await markAccountError(account.id, errorText(err));
-        }
-        throw err;
+        // Recorded whatever the cause, so the console shows why and the brief
+        // can name the account as skipped. TokenRevokedError is the one a human
+        // has to fix by reconnecting; the rest may well pass on the next run.
+        const reason = errorText(err);
+        await markAccountError(account.id, reason);
+        return { email: account.email, reason };
       }
-    }),
+    },
   );
 
   const summary: SyncSummary = { synced: [], skipped: [] };
-
-  settled.forEach((outcome, i) => {
-    const account = accounts[i];
-    if (!account) return;
-    if (outcome.status === "fulfilled") {
-      summary.synced.push(account.email);
-    } else {
-      summary.skipped.push({
-        email: account.email,
-        reason: errorText(outcome.reason),
-      });
-    }
-  });
+  for (const outcome of outcomes) {
+    if (outcome.reason === undefined) summary.synced.push(outcome.email);
+    else summary.skipped.push({ email: outcome.email, reason: outcome.reason });
+  }
 
   return summary;
 }
