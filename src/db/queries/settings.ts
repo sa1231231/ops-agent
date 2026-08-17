@@ -14,6 +14,8 @@ export const SETTING_KEYS = {
   briefHour: "brief_hour",
   /** Who the greeting addresses. A setting, not a constant, so a misspelling is his to fix. */
   briefGreetingName: "brief_greeting_name",
+  /** "1" while the scheduled send is held. Absent means running. */
+  briefPaused: "brief_paused",
 } as const;
 
 export async function getSetting(key: string): Promise<string | null> {
@@ -85,6 +87,32 @@ export async function briefGreetingName(): Promise<string> {
 }
 
 export const DEFAULT_GREETING_NAME = "Payeman";
+
+/**
+ * Whether the scheduled brief is being held.
+ *
+ * A setting rather than an env var, because the point is to stop the morning
+ * send from the console in the middle of a working day and start it again an
+ * hour later. An env var means a redeploy, and a redeploy to silence a bad send
+ * is exactly the thing you cannot do at 6:29.
+ *
+ * Deliberately does not pause sync. Holding the send is about not delivering a
+ * broken message; letting mail go stale underneath it would mean the first brief
+ * after resuming is built on old data, which looks completely normal and is
+ * wrong. It also does not pause the console's own button, so a paused system is
+ * still one you can test against.
+ *
+ * Stored as a string because `settings.value` is text, and absent means running
+ * so that an install that has never touched this behaves as it always did.
+ */
+export async function isBriefPaused(): Promise<boolean> {
+  return (await getSetting(SETTING_KEYS.briefPaused)) === "1";
+}
+
+export async function setBriefPaused(paused: boolean): Promise<void> {
+  if (paused) await setSetting(SETTING_KEYS.briefPaused, "1");
+  else await deleteSetting(SETTING_KEYS.briefPaused);
+}
 
 /** Stripped to what fits in a greeting; the message is GSM-7 and single-line. */
 export function normalizeGreetingName(raw: string): string {

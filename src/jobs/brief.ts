@@ -10,7 +10,12 @@ import {
   scheduledSendExists,
 } from "../db/queries/briefs.js";
 import { activeBriefRules, recordRuleFires } from "../db/queries/rules.js";
-import { briefGreetingName, briefHour, briefRecipient } from "../db/queries/settings.js";
+import {
+  briefGreetingName,
+  briefHour,
+  briefRecipient,
+  isBriefPaused,
+} from "../db/queries/settings.js";
 import { formatSkippedAccounts, notifyOperator } from "../outputs/operatorEmail.js";
 import {
   conflictLines,
@@ -48,7 +53,7 @@ export interface BriefRunOptions {
 }
 
 export interface BriefRunResult {
-  status: "sent" | "preview" | "not-due" | "already-sent";
+  status: "sent" | "preview" | "not-due" | "already-sent" | "paused";
   message: string;
   text?: string;
   briefUrl?: string;
@@ -79,6 +84,16 @@ export async function runBrief(
   const force = options.force ?? ENV_FORCE;
   const trigger = options.trigger ?? "manual";
   const localDate = localDateString(now);
+
+  // Checked before the hour gate so the log says "paused" rather than "not due"
+  // on the twenty-three hours where both are true. Only the schedule is held:
+  // the console's button passes trigger "manual" and still runs, which is the
+  // point of pausing at all, and a dry run was never going to send anything.
+  if (trigger === "scheduled" && !dryRun && (await isBriefPaused())) {
+    const message = `Scheduled brief is paused, nothing sent for ${localDate}`;
+    console.log(`[brief] ${message}`);
+    return { status: "paused", message };
+  }
 
   // Container clocks are UTC, so the cycle fires hourly and gates on his local
   // hour. This survives DST without a twice-yearly adjustment.

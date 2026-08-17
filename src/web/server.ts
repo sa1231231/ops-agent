@@ -23,9 +23,11 @@ import {
   briefHour,
   deleteSetting,
   getSetting,
+  isBriefPaused,
   normalizeGreetingName,
   normalizeHour,
   normalizePhoneNumber,
+  setBriefPaused,
   setSetting,
   SETTING_KEYS,
 } from "../db/queries/settings.js";
@@ -133,7 +135,17 @@ async function handleSettingsPost(
   try {
     // One endpoint, two independent forms: each posts only its own field, so
     // saving the hour must not wipe the recipient.
-    if (form.has(SETTING_KEYS.briefHour)) {
+    if (form.has(SETTING_KEYS.briefPaused)) {
+      const pause = form.get(SETTING_KEYS.briefPaused) === "1";
+      await setBriefPaused(pause);
+      query =
+        "?saved=" +
+        encodeURIComponent(
+          pause
+            ? "Scheduled send paused. Syncing continues, and Run now still sends."
+            : "Scheduled send resumed.",
+        );
+    } else if (form.has(SETTING_KEYS.briefHour)) {
       await setSetting(
         SETTING_KEYS.briefHour,
         normalizeHour(form.get(SETTING_KEYS.briefHour) ?? ""),
@@ -625,12 +637,13 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
           ? { ok: true, message: saved === "1" ? "Saved." : saved }
           : null;
 
-    const [accounts, recipient, synced, hour, greeting] = await Promise.all([
+    const [accounts, recipient, synced, hour, greeting, paused] = await Promise.all([
       listAccounts(),
       getSetting(SETTING_KEYS.briefRecipient),
       lastSyncedAt(),
       briefHour(BRIEF_HOUR),
       briefGreetingName(),
+      isBriefPaused(),
     ]);
 
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -643,6 +656,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
         synced,
         hour,
         greeting,
+        paused,
       ),
     );
     return;

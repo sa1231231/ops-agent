@@ -100,6 +100,13 @@ const STYLE = `
     padding: .5rem .95rem; font: inherit; font-size: .875rem; font-weight: 600;
     border: 0; border-radius: 6px; background: CanvasText; color: Canvas; cursor: pointer;
   }
+  /* Pausing is a step back from normal operation, so it does not compete with
+     the Save buttons above it. Resuming uses the solid default. */
+  button.quiet {
+    background: transparent; color: inherit;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, CanvasText 28%, transparent);
+  }
+  button.quiet:hover { background: color-mix(in srgb, CanvasText 8%, transparent); }
   .hint { font-size: .78rem; opacity: .5; margin: .55rem 0 0; max-width: 52ch; }
   details.danger > summary {
     cursor: pointer; font-size: .82rem; opacity: .55; font-weight: 600;
@@ -160,6 +167,7 @@ export function renderAccountsPage(
   lastSynced: Date | null = null,
   briefHourValue = 6,
   greetingName = "",
+  paused = false,
 ): string {
   const zone = timeZoneLabel();
   const rows = accounts
@@ -204,7 +212,11 @@ export function renderAccountsPage(
       ${runStatus(job, lastSynced)}
       <p class="hint">
         Pulls every connected account, then composes today's brief and texts it.
-        The same thing the scheduled run does at ${String(briefHourValue).padStart(2, "0")}:00.
+        ${
+          paused
+            ? "The scheduled send is paused, so this button is currently the only thing that sends."
+            : `The same thing the scheduled run does at ${String(briefHourValue).padStart(2, "0")}:00.`
+        }
       </p>
     </section>`
     : "";
@@ -270,15 +282,36 @@ export function renderAccountsPage(
       <form method="post" action="/settings" style="margin-top:1.4rem">
         <label for="hour">Sent at</label>
         <div class="row">
-          <select id="hour" name="brief_hour">
+          <select id="hour" name="brief_hour" ${paused ? "disabled" : ""}>
             ${Array.from({ length: 24 }, (_, h) => {
               const label = `${String(h).padStart(2, "0")}:00 ${zone}`;
               return `<option value="${h}"${h === briefHourValue ? " selected" : ""}>${label}</option>`;
             }).join("")}
           </select>
-          <button type="submit">Save</button>
+          <button type="submit" ${paused ? "disabled" : ""}>Save</button>
         </div>
         <p class="hint">${escapeHtml(BRIEF_TZ)}</p>
+      </form>
+
+      <form method="post" action="/settings" style="margin-top:1.4rem">
+        <label>Scheduled send</label>
+        <div class="row">
+          <span class="pill ${paused ? "warn" : "ok"}">${paused ? "Paused" : "Running"}</span>
+          <input type="hidden" name="brief_paused" value="${paused ? "0" : "1"}">
+          <button type="submit" class="${paused ? "" : "quiet"}">
+            ${paused ? "Resume scheduled send" : "Pause scheduled send"}
+          </button>
+        </div>
+        <p class="hint">
+          ${
+            paused
+              ? `Nothing will be sent at ${String(briefHourValue).padStart(2, "0")}:00 until you resume.
+                 Accounts keep syncing, so the first brief after resuming is built on current mail,
+                 and "Run now" below still works for testing.`
+              : `Holds the ${String(briefHourValue).padStart(2, "0")}:00 send without touching anything else.
+                 Syncing carries on and "Run now" below still works, so this stops delivery, not the system.`
+          }
+        </p>
       </form>
     </section>
     ${jobSection}
