@@ -152,6 +152,53 @@ export const ASK_PATTERNS: ReadonlyArray<{ name: string; re: RegExp }> = [
  * pointed omission, so the demotion here is little more than an acknowledgement
  * that he is aware of it.
  */
+/**
+ * Out of the inbox.
+ *
+ * Stronger evidence than read, and the reason is that it works for both habits.
+ * Six of the last ten archives here happened *without* the message ever being
+ * opened, which is somebody clearing a list view rather than reading. Whether he
+ * read it or swiped it away, an archived message is one he has decided about,
+ * and that decision does not depend on how he treats unread mail.
+ *
+ * Applies even when something was asked. Reading a question and archiving it are
+ * different acts: the first is noticing, the second is answering the question of
+ * whether he intends to do anything.
+ */
+export const ARCHIVED = -45;
+
+/**
+ * Gmail's own opinion, which is trained on years of his behaviour and free.
+ *
+ * Only the absence is scored. 58 of 81 inbound messages carry IMPORTANT, so its
+ * presence is close to the baseline and says almost nothing, while its absence
+ * is Gmail actively declining to flag something. Small either way: this is a
+ * tiebreaker, not a verdict, and it is the one signal here we did not compute
+ * and cannot explain to him.
+ */
+export const NOT_GMAIL_IMPORTANT = -8;
+
+/**
+ * The brief has said this on N mornings and he has done nothing about it.
+ *
+ * Every other demotion reads the mailbox. This one reads his response to the
+ * brief itself, which is why it is the only signal that works no matter how he
+ * treats his inbox, and the only one that cannot be defeated by habit.
+ *
+ * Today repetition makes an item *more* prominent: carry-over holds its
+ * position while the age curve keeps adding points, so the longer he ignores
+ * something the harder the brief insists. Ten mornings on one thread, no
+ * verdict. That is the system arguing with him, and it is unfalsifiable.
+ *
+ * Starts on the fourth morning, because three is a coincidence and four is a
+ * pattern, and grows so an item leaves rather than lingering just under the
+ * line. Capped so it stays a demotion and never becomes a hard filter: he can
+ * still be wrong, and "Not right" is the honest way to say so.
+ */
+export const FATIGUE_AFTER_MORNINGS = 4;
+export const FATIGUE_PER_MORNING = -9;
+export const FATIGUE_MAX = -45;
+
 export const READ_NO_ASK = -34;
 export const READ_WITH_ASK = -6;
 

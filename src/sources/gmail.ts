@@ -370,7 +370,15 @@ const RECONSIDER_ON_LABEL = new Set([
  * Narrow for the same reason the added set is: unstarring and removing user
  * labels are not worth an API call.
  */
-const RECONSIDER_ON_LABEL_REMOVED = new Set(["UNREAD"]);
+const RECONSIDER_ON_LABEL_REMOVED = new Set([
+  // He opened it.
+  "UNREAD",
+  // He archived it. INBOX is deliberately absent from ALWAYS_EXCLUDED and the
+  // list query does not say in:inbox, so an archived message is kept and
+  // demoted rather than deleted. Losing the thread and ranking it lower are
+  // very different outcomes and only one of them is wanted here.
+  "INBOX",
+]);
 
 export interface IncrementalResult {
   messages: NormalizedMessage[];

@@ -38,6 +38,9 @@ function candidate(overrides: Partial<ThreadCandidate> = {}): ThreadCandidate {
     isAutomated: false,
     hasListUnsubscribe: false,
     isUnread: true,
+    isArchived: false,
+    isImportant: true,
+    reportedMornings: 0,
     outboundCount: 3,
     lastOutboundToSenderAt: daysAgo(5),
     meetingSoonAt: null,
@@ -285,5 +288,112 @@ describe("already-read", () => {
       NOW,
     );
     assert.equal(replied.signals.filter((s) => s.name === "already-read").length, 0);
+  });
+});
+
+describe("archived", () => {
+  const base = {
+    subject: "Good article for singers",
+    snippet: "Sharing this along, thought you would enjoy it.",
+    lastInboundAt: daysAgo(8),
+    awaitingReply: true,
+  };
+
+  it("demotes harder than reading it, and stops age accruing", () => {
+    const read = scoreThread(candidate({ ...base, isUnread: false }), NOW);
+    const filed = scoreThread(
+      candidate({ ...base, isUnread: false, isArchived: true }),
+      NOW,
+    );
+    assert.ok(filed.score < read.score, `${filed.score} vs ${read.score}`);
+    assert.equal(filed.signals.filter((s) => s.name === "aging").length, 0);
+  });
+
+  it("counts even when he never opened it", () => {
+    // Six of the last ten archives happened without the message being read.
+    // Clearing a list view is triage too.
+    const swiped = scoreThread(
+      candidate({ ...base, isUnread: true, isArchived: true }),
+      NOW,
+    );
+    assert.ok(swiped.signals.some((s) => s.name === "archived"));
+    assert.ok(!swiped.signals.some((s) => s.name === "already-read"));
+  });
+
+  it("still demotes when something was asked, unlike reading", () => {
+    const asked = { ...base, snippet: "Can you review this and confirm?" };
+    const filed = scoreThread(
+      candidate({ ...asked, isUnread: false, isArchived: true }),
+      NOW,
+    );
+    assert.ok(filed.signals.some((s) => s.name === "archived"));
+  });
+});
+
+describe("report fatigue", () => {
+  const nagged = {
+    subject: "Watch this and learn",
+    snippet: "Sharing a clip you might like.",
+    lastInboundAt: daysAgo(8),
+    awaitingReply: true,
+  };
+
+  it("says nothing for the first three mornings", () => {
+    for (const mornings of [0, 1, 2, 3]) {
+      const t = scoreThread(candidate({ ...nagged, reportedMornings: mornings }), NOW);
+      assert.equal(
+        t.signals.filter((s) => s.name === "report-fatigue").length,
+        0,
+        `fired at ${mornings} mornings`,
+      );
+    }
+  });
+
+  it("starts on the fourth and grows", () => {
+    const fourth = scoreThread(candidate({ ...nagged, reportedMornings: 4 }), NOW);
+    const eighth = scoreThread(candidate({ ...nagged, reportedMornings: 8 }), NOW);
+    const points = (t: typeof fourth) =>
+      t.signals.find((s) => s.name === "report-fatigue")?.points ?? 0;
+    assert.ok(points(fourth) < 0);
+    assert.ok(points(eighth) < points(fourth));
+    assert.ok(points(eighth) >= W.FATIGUE_MAX, "must stay capped");
+  });
+
+  it("holds back when something was actually asked", () => {
+    // Putting off a real request is exactly when the brief should keep saying it.
+    const asked = scoreThread(
+      candidate({
+        ...nagged,
+        snippet: "Can you confirm the redline before Friday?",
+        reportedMornings: 9,
+      }),
+      NOW,
+    );
+    assert.equal(asked.signals.filter((s) => s.name === "report-fatigue").length, 0);
+  });
+
+  it("holds back while a deadline is live", () => {
+    const due = scoreThread(
+      candidate({
+        ...nagged,
+        reportedMornings: 9,
+        deadline: { state: "today", phrase: "by the 14th", date: "2026-08-13" },
+      }),
+      NOW,
+    );
+    assert.equal(due.signals.filter((s) => s.name === "report-fatigue").length, 0);
+  });
+});
+
+describe("gmail importance", () => {
+  it("is a tiebreaker, never a verdict", () => {
+    const base = { awaitingReply: true, lastInboundAt: daysAgo(3) };
+    const marked = scoreThread(candidate({ ...base, isImportant: true }), NOW);
+    const not = scoreThread(candidate({ ...base, isImportant: false }), NOW);
+    assert.ok(not.score < marked.score);
+    assert.ok(
+      marked.score - not.score < W.AWAITING_REPLY,
+      "must never outweigh the thread actually waiting",
+    );
   });
 });

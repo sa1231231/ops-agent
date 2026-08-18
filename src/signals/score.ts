@@ -32,6 +32,15 @@ export interface ThreadCandidate {
   hasListUnsubscribe: boolean;
   /** Gmail still marks the newest inbound message unread. */
   isUnread: boolean;
+  /** The newest inbound message is no longer in the inbox. */
+  isArchived: boolean;
+  /** Gmail's own importance marker on the newest inbound message. */
+  isImportant: boolean;
+  /**
+   * Mornings this thread has appeared in a brief since the count last reset.
+   * Resets on a new inbound message and on a "Good call" verdict.
+   */
+  reportedMornings: number;
 
   /** From the correspondent graph, for this sender on this account. */
   outboundCount: number;
@@ -147,8 +156,19 @@ export function scoreThread(
     // He has already seen it. Only meaningful while the thread is otherwise
     // waiting: an unread message he never opened is the ordinary case and earns
     // nothing here either way.
-    const seenAndUnasked = !candidate.isUnread && ask === null;
-    if (!candidate.isUnread) {
+    // Archived outranks read as evidence and is checked first: if it is out of
+    // the inbox, how he got there stops mattering.
+    if (candidate.isArchived) {
+      signals.push({
+        name: "archived",
+        points: W.ARCHIVED,
+        detail: "you took it out of the inbox",
+      });
+    }
+
+    const seenAndUnasked =
+      candidate.isArchived || (!candidate.isUnread && ask === null);
+    if (!candidate.isUnread && !candidate.isArchived) {
       signals.push(
         ask
           ? {
@@ -268,6 +288,39 @@ export function scoreThread(
 
   // Detected once, above, because the read penalty branches on it.
   if (ask) signals.push(ask);
+
+  if (!candidate.isImportant) {
+    signals.push({
+      name: "not-gmail-important",
+      points: W.NOT_GMAIL_IMPORTANT,
+      detail: "Gmail did not mark it important",
+    });
+  }
+
+  // The brief has said this on N mornings and he has not acted, archived it, or
+  // pressed a verdict on it. At that point the repetition is the evidence.
+  //
+  // Held back where something was actually asked or a date is live. Someone
+  // putting off a real obligation is exactly when the brief should keep saying
+  // it, and quietly dropping a deadline on day four because he had not got to it
+  // yet would be the worst failure this thing could have.
+  const deadlineLive =
+    candidate.deadline !== null &&
+    candidate.deadline !== undefined &&
+    ["today", "overdue", "tomorrow"].includes(candidate.deadline.state);
+
+  if (
+    candidate.reportedMornings >= W.FATIGUE_AFTER_MORNINGS &&
+    ask === null &&
+    !deadlineLive
+  ) {
+    const over = candidate.reportedMornings - W.FATIGUE_AFTER_MORNINGS + 1;
+    signals.push({
+      name: "report-fatigue",
+      points: Math.max(over * W.FATIGUE_PER_MORNING, W.FATIGUE_MAX),
+      detail: `reported ${candidate.reportedMornings} mornings, no action taken`,
+    });
+  }
 
   if (candidate.messageCount >= W.CONVERSATION_MIN_MESSAGES) {
     signals.push({

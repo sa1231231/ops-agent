@@ -35,6 +35,9 @@ interface CandidateRow {
   is_automated: boolean;
   has_list_unsubscribe: boolean;
   is_unread: boolean;
+  is_archived: boolean;
+  is_important: boolean;
+  reported_mornings: number;
   outbound_count: number;
   last_outbound_to_sender_at: Date | null;
   meeting_soon_at: Date | null;
@@ -48,9 +51,11 @@ with latest_inbound as (
   select distinct on (m.account_id, m.gmail_thread_id)
          m.account_id, m.gmail_thread_id, m.from_email, m.from_name, m.snippet,
          m.to_emails, m.cc_emails, m.is_automated, m.has_list_unsubscribe,
-         -- Gmail's own read state for the newest inbound message. Absent means
-         -- he has opened it.
-         ('UNREAD' = any(m.labels)) as is_unread
+         -- Gmail's own state for the newest inbound message. Absent UNREAD means
+         -- he opened it; absent INBOX means he archived it.
+         ('UNREAD' = any(m.labels)) as is_unread,
+         (not ('INBOX' = any(m.labels))) as is_archived,
+         ('IMPORTANT' = any(m.labels)) as is_important
     from messages m
    where m.direction = 'inbound'
    order by m.account_id, m.gmail_thread_id, m.sent_at desc nulls last
@@ -72,6 +77,27 @@ select
   li.is_automated,
   li.has_list_unsubscribe,
   li.is_unread,
+  li.is_archived,
+  li.is_important,
+
+  -- Mornings this thread has been in a brief, counted only since the last time
+  -- the count was reset. Two things reset it. A new inbound message, because
+  -- that is new information and the old repetitions were about something else.
+  -- And a "Good call" verdict, because he has explicitly said the repetition was
+  -- right, and continuing to count toward giving up would be overruling him.
+  (select count(distinct b.local_date)
+     from brief_items bi
+     join briefs b on b.id = bi.brief_id
+    where bi.kind = 'email'
+      and bi.ref_key = t.account_id::text || ':' || t.gmail_thread_id
+      and b.local_date > coalesce(
+            (select max(b2.local_date)
+               from feedback f
+               join briefs b2 on b2.id = f.brief_id
+              where f.thread_key = bi.ref_key and f.verdict = 'good'),
+            '-infinity'::date)
+      and b.local_date >= coalesce(t.last_inbound_at::date, '-infinity'::date)
+  )::int as reported_mornings,
   coalesce(c.outbound_count, 0) as outbound_count,
   c.last_outbound_at as last_outbound_to_sender_at,
 
@@ -128,6 +154,9 @@ function toCandidate(row: CandidateRow, now: Date): ThreadCandidate {
     isAutomated: row.is_automated,
     hasListUnsubscribe: row.has_list_unsubscribe,
     isUnread: row.is_unread,
+    isArchived: row.is_archived,
+    isImportant: row.is_important,
+    reportedMornings: row.reported_mornings,
     outboundCount: row.outbound_count,
     lastOutboundToSenderAt: row.last_outbound_to_sender_at,
     meetingSoonAt: row.meeting_soon_at,
