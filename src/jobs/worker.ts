@@ -2,8 +2,8 @@ import { pool } from "../db/pool.js";
 import { notifyOperator } from "../outputs/operatorEmail.js";
 import { briefHour } from "../db/queries/settings.js";
 import { BRIEF_HOUR, BRIEF_TZ, localHour } from "../time.js";
-import { runBrief } from "./brief.js";
-import { syncAll } from "./sync.js";
+import { briefBlockedBy, runBrief } from "./brief.js";
+import { syncAll, type SkippedSync } from "./sync.js";
 
 /**
  * One scheduled cycle: sync every account, then attempt the brief.
@@ -26,6 +26,67 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/**
+ * How long the pre-brief retry is allowed to take.
+ *
+ * The brief must go out whether or not Google is answering, so this is a hard
+ * ceiling rather than a target. If the retry has not finished by then the cycle
+ * moves on and the brief names the account as skipped, which is exactly what it
+ * would have done without the retry. Nothing is lost by giving up.
+ *
+ * Ninety seconds because the failures worth catching here resolve in one or two
+ * (a refused connection, a 500, a token endpoint having a bad moment), and the
+ * ones that do not are the ones there is no point waiting for.
+ */
+const RETRY_DEADLINE_MS = 90_000;
+
+/**
+ * Gives failed accounts one more attempt, but only when the brief is about to
+ * send.
+ *
+ * An account that fails at 13:00 has another sync coming in an hour and nothing
+ * depends on it in the meantime, so retrying then is wasted work. An account
+ * that fails at 06:00 is about to be a line in his brief saying his mail could
+ * not be read, and the failure is usually the kind that would have worked on a
+ * second attempt. That is the only moment where a retry buys anything.
+ *
+ * Permanent failures are skipped. A revoked grant returns invalid_grant just as
+ * fast the second time, and the only thing retrying it does is spend part of the
+ * deadline that a recoverable account might have needed.
+ */
+export function retryableEmails(skipped: readonly SkippedSync[]): string[] {
+  return skipped.filter((s) => !s.permanent).map((s) => s.email);
+}
+
+async function retryBeforeBrief(skipped: SkippedSync[]): Promise<void> {
+  const retryable = retryableEmails(skipped);
+  if (retryable.length === 0) return;
+
+  console.log(`[worker] brief is due, retrying ${retryable.join(", ")}`);
+
+  // Raced rather than awaited: syncAll has no per-request timeout, so a hung
+  // connection would otherwise hold the brief open indefinitely. The loser keeps
+  // running and its writes are idempotent, so a late finish is harmless.
+  const retry = syncAll({ only: new Set(retryable) })
+    .then((again) => {
+      const recovered = again.synced;
+      console.log(
+        recovered.length > 0
+          ? `[worker] retry recovered ${recovered.join(", ")}`
+          : "[worker] retry recovered nothing",
+      );
+    })
+    .catch((err: unknown) => {
+      // Never fatal. The brief runs on whatever is stored either way.
+      console.error("[worker] retry failed:", errorText(err));
+    });
+
+  await Promise.race([
+    retry,
+    new Promise<void>((resolve) => setTimeout(resolve, RETRY_DEADLINE_MS)),
+  ]);
+}
+
 export async function runCycle(): Promise<{ syncFailed: string | null }> {
   const started = Date.now();
   let syncFailed: string | null = null;
@@ -40,6 +101,13 @@ export async function runCycle(): Promise<{ syncFailed: string | null }> {
     );
     for (const s of summary.skipped) {
       console.error(`[worker] skipped ${s.email}: ${s.reason}`);
+    }
+
+    // Asked before the brief runs, not after: once runBrief has read Postgres
+    // the answer is too late to be useful.
+    if (summary.skipped.length > 0) {
+      const blocked = await briefBlockedBy(new Date(), { scheduled: true, force: false });
+      if (blocked === null) await retryBeforeBrief(summary.skipped);
     }
   } catch (err) {
     syncFailed = errorText(err);

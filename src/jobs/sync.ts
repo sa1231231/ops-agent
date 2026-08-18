@@ -160,9 +160,27 @@ async function syncAccount(account: Account): Promise<void> {
   await markAccountSynced(account.id, historyId);
 }
 
+export interface SkippedSync {
+  email: string;
+  reason: string;
+  /** True when only a human reconnecting the account can fix it. */
+  permanent: boolean;
+}
+
 export interface SyncSummary {
   synced: string[];
-  skipped: Array<{ email: string; reason: string }>;
+  skipped: SkippedSync[];
+}
+
+export interface SyncOptions {
+  /**
+   * Restrict the run to these addresses.
+   *
+   * Used for the second pass before the brief, which retries only the accounts
+   * that just failed. Re-syncing the fourteen that succeeded would cost minutes
+   * for nothing at the one moment of the day where minutes matter.
+   */
+  only?: ReadonlySet<string>;
 }
 
 /**
@@ -181,15 +199,17 @@ export interface SyncSummary {
  */
 const ACCOUNT_CONCURRENCY = 4;
 
-export async function syncAll(): Promise<SyncSummary> {
-  const accounts = (await listAccounts()).filter((a) => a.status !== "disabled");
+export async function syncAll(options: SyncOptions = {}): Promise<SyncSummary> {
+  const accounts = (await listAccounts()).filter(
+    (a) => a.status !== "disabled" && (options.only?.has(a.email) ?? true),
+  );
 
   // Every task resolves, including the failures: one dead account is a row in
   // the summary, never something that cancels the other fourteen.
   const outcomes = await mapWithConcurrency(
     accounts,
     ACCOUNT_CONCURRENCY,
-    async (account): Promise<{ email: string; reason?: string }> => {
+    async (account): Promise<{ email: string; reason?: string; permanent?: boolean }> => {
       try {
         await syncAccount(account);
         return { email: account.email };
@@ -201,12 +221,13 @@ export async function syncAll(): Promise<SyncSummary> {
         // leaves a message on the row and lets the stale threshold decide when
         // it has gone on long enough to be worth someone's attention.
         const reason = errorText(err);
-        if (err instanceof TokenRevokedError) {
+        const permanent = err instanceof TokenRevokedError;
+        if (permanent) {
           await markAccountError(account.id, reason);
         } else {
           await markAccountSyncFailure(account.id, reason);
         }
-        return { email: account.email, reason };
+        return { email: account.email, reason, permanent };
       }
     },
   );
@@ -214,7 +235,12 @@ export async function syncAll(): Promise<SyncSummary> {
   const summary: SyncSummary = { synced: [], skipped: [] };
   for (const outcome of outcomes) {
     if (outcome.reason === undefined) summary.synced.push(outcome.email);
-    else summary.skipped.push({ email: outcome.email, reason: outcome.reason });
+    else
+      summary.skipped.push({
+        email: outcome.email,
+        reason: outcome.reason,
+        permanent: outcome.permanent ?? false,
+      });
   }
 
   return summary;

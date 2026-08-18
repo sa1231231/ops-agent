@@ -59,6 +59,62 @@ export interface BriefRunResult {
   briefUrl?: string;
 }
 
+export interface BriefBlocked {
+  status: "not-due" | "already-sent" | "paused";
+  message: string;
+}
+
+/**
+ * What would stop this run from sending, or null if nothing would.
+ *
+ * Split out so the worker can ask "is the brief about to go out?" before it
+ * decides whether to spend time retrying a failed account. Answering that by
+ * re-deriving the hour comparison somewhere else is how the two drift apart and
+ * the retry stops firing on exactly the cycle it was built for.
+ *
+ * `scheduled` means a real scheduled send: pause and the once-a-day guard apply
+ * to those and to nothing else. A dry run was never going to send, and the
+ * console's button is deliberately exempt from both.
+ */
+export async function briefBlockedBy(
+  now: Date,
+  opts: { scheduled: boolean; force: boolean },
+): Promise<BriefBlocked | null> {
+  const localDate = localDateString(now);
+
+  // Checked before the hour gate so the log says "paused" rather than "not due"
+  // on the twenty-three hours where both are true.
+  if (opts.scheduled && (await isBriefPaused())) {
+    return {
+      status: "paused",
+      message: `Scheduled brief is paused, nothing sent for ${localDate}`,
+    };
+  }
+
+  // Container clocks are UTC, so the cycle fires hourly and gates on his local
+  // hour. This survives DST without a twice-yearly adjustment. The configured
+  // hour wins; the env var is only a fallback for a fresh deployment where
+  // nobody has opened the console yet.
+  const targetHour = await briefHour(BRIEF_HOUR);
+  if (!opts.force && localHour(now) !== targetHour) {
+    return {
+      status: "not-due",
+      message: `Not ${targetHour}:00 local (it is ${localHour(now)}:00), nothing to do`,
+    };
+  }
+
+  // The hour gate stops a single scheduler firing twice. This stops *two*
+  // schedulers, an in-process one and a platform cron, from both sending.
+  if (opts.scheduled && (await scheduledSendExists(localDate))) {
+    return {
+      status: "already-sent",
+      message: `Already sent on schedule for ${localDate}, nothing to do`,
+    };
+  }
+
+  return null;
+}
+
 interface SkippedAccount {
   email: string;
   reason: string;
@@ -114,34 +170,13 @@ export async function runBrief(
   const trigger = options.trigger ?? "manual";
   const localDate = localDateString(now);
 
-  // Checked before the hour gate so the log says "paused" rather than "not due"
-  // on the twenty-three hours where both are true. Only the schedule is held:
-  // the console's button passes trigger "manual" and still runs, which is the
-  // point of pausing at all, and a dry run was never going to send anything.
-  if (trigger === "scheduled" && !dryRun && (await isBriefPaused())) {
-    const message = `Scheduled brief is paused, nothing sent for ${localDate}`;
-    console.log(`[brief] ${message}`);
-    return { status: "paused", message };
-  }
-
-  // Container clocks are UTC, so the cycle fires hourly and gates on his local
-  // hour. This survives DST without a twice-yearly adjustment.
-  // The configured hour wins; the env var is only a fallback for a fresh
-  // deployment where nobody has opened the console yet.
-  const targetHour = await briefHour(BRIEF_HOUR);
-  if (!force && localHour(now) !== targetHour) {
-    const message = `Not ${targetHour}:00 local (it is ${localHour(now)}:00), nothing to do`;
-    console.log(`[brief] ${message}`);
-    return { status: "not-due", message };
-  }
-
-  // The hour gate stops a single scheduler firing twice. This stops *two*
-  // schedulers — an in-process one and a platform cron — from both sending.
-  // Manual runs are unaffected, deliberately.
-  if (trigger === "scheduled" && !dryRun && (await scheduledSendExists(localDate))) {
-    const message = `Already sent on schedule for ${localDate}, nothing to do`;
-    console.log(`[brief] ${message}`);
-    return { status: "already-sent", message };
+  const blocked = await briefBlockedBy(now, {
+    scheduled: trigger === "scheduled" && !dryRun,
+    force,
+  });
+  if (blocked) {
+    console.log(`[brief] ${blocked.message}`);
+    return blocked;
   }
 
   // A preview records nothing at all; a real send always creates a row.
