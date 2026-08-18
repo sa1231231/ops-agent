@@ -1,6 +1,6 @@
 import { pool } from "../db/pool.js";
 import { decrypt, encrypt } from "./crypto.js";
-import { refreshAccessToken } from "./google.js";
+import { GoogleTokenError, refreshAccessToken } from "./google.js";
 
 /**
  * Hands out a usable access token for an account, refreshing and persisting
@@ -12,6 +12,9 @@ import { refreshAccessToken } from "./google.js";
  * 401 from whichever API happened to be called first.
  */
 
+/**
+ * The grant is gone. Only a human reconnecting the account fixes this.
+ */
 export class TokenRevokedError extends Error {
   constructor(
     readonly accountId: number,
@@ -20,6 +23,28 @@ export class TokenRevokedError extends Error {
   ) {
     super(`Google refused to refresh the token for ${email}: ${cause}`);
     this.name = "TokenRevokedError";
+  }
+}
+
+/**
+ * Refresh did not work this time, and the token is probably fine.
+ *
+ * Kept separate from TokenRevokedError because the two demand opposite
+ * responses: one is "go reconnect this account", the other is "wait". Collapsing
+ * them, which is what this code used to do, meant a 500 from Google produced a
+ * red "auth error" badge and named the account as skipped in the morning brief,
+ * for something that cleared itself on the next cycle. The cost of that mistake
+ * is not the failed sync, it is fifteen accounts worth of alerts nobody can
+ * distinguish from a real one.
+ */
+export class TokenRefreshFailedError extends Error {
+  constructor(
+    readonly accountId: number,
+    readonly email: string,
+    cause: string,
+  ) {
+    super(`Could not refresh the token for ${email} right now: ${cause}`);
+    this.name = "TokenRefreshFailedError";
   }
 }
 
@@ -65,13 +90,15 @@ export async function getAccessToken(accountId: number): Promise<string> {
   try {
     fresh = await refreshAccessToken(decrypt(row.refresh_token_enc));
   } catch (err) {
-    // invalid_grant means revoked, password-changed, or consent withdrawn.
-    // Not retryable — the account needs a human to reconnect it.
-    throw new TokenRevokedError(
-      accountId,
-      row.email,
-      err instanceof Error ? err.message : String(err),
-    );
+    const message = err instanceof Error ? err.message : String(err);
+    // invalid_grant means revoked, password-changed, or consent withdrawn, and
+    // no retry helps. A 500, a 429, or a dropped connection means Google had a
+    // bad moment; google.ts has already retried it, and treating what is left as
+    // a revocation would be a lie about the account.
+    if (err instanceof GoogleTokenError && !err.isPermanent) {
+      throw new TokenRefreshFailedError(accountId, row.email, message);
+    }
+    throw new TokenRevokedError(accountId, row.email, message);
   }
 
   await pool.query(

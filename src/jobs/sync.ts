@@ -1,8 +1,9 @@
-import { getAccessToken } from "../auth/tokens.js";
+import { getAccessToken, TokenRevokedError } from "../auth/tokens.js";
 import { pool } from "../db/pool.js";
 import {
   listAccounts,
   markAccountError,
+  markAccountSyncFailure,
   type Account,
 } from "../db/queries/accounts.js";
 import { reconcileEvents, upsertEvents } from "../db/queries/events.js";
@@ -194,10 +195,17 @@ export async function syncAll(): Promise<SyncSummary> {
         return { email: account.email };
       } catch (err) {
         // Recorded whatever the cause, so the console shows why and the brief
-        // can name the account as skipped. TokenRevokedError is the one a human
-        // has to fix by reconnecting; the rest may well pass on the next run.
+        // can name the account as skipped. Only a revoked grant flips the
+        // account to auth_error: that is the one a human has to fix by
+        // reconnecting. Everything else may well pass on the next run, so it
+        // leaves a message on the row and lets the stale threshold decide when
+        // it has gone on long enough to be worth someone's attention.
         const reason = errorText(err);
-        await markAccountError(account.id, reason);
+        if (err instanceof TokenRevokedError) {
+          await markAccountError(account.id, reason);
+        } else {
+          await markAccountSyncFailure(account.id, reason);
+        }
         return { email: account.email, reason };
       }
     },

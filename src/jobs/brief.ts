@@ -64,15 +64,44 @@ interface SkippedAccount {
   reason: string;
 }
 
+/**
+ * How far behind a mailbox has to be before the brief admits it.
+ *
+ * Sync runs hourly, so three hours is three missed cycles, not a slow one. The
+ * console flags staleness sooner because it is being looked at deliberately;
+ * the brief is read once at 6:30 and every line in it has to earn its place.
+ *
+ * This exists because a transient refresh failure no longer marks an account
+ * auth_error. Without a staleness check, an account that quietly stopped syncing
+ * would drop out of the brief entirely and the brief would look completely
+ * normal, which is the worst possible way for this to fail.
+ */
+const BRIEF_STALE_SYNC_MS = 3 * 60 * 60 * 1000;
+
 async function skippedAccounts(): Promise<SkippedAccount[]> {
-  const { rows } = await pool.query<{ email: string; last_error: string | null }>(
-    `select email, last_error from accounts
-      where status = 'auth_error' or last_sync_at is null
+  const { rows } = await pool.query<{
+    email: string;
+    last_error: string | null;
+    last_sync_at: Date | null;
+  }>(
+    // Disconnected accounts are excluded: they are not skipped, they are gone.
+    // Without this the staleness clause would name every account he ever
+    // removed, forever.
+    `select email, last_error, last_sync_at from accounts
+      where status <> 'disabled'
+        and (status = 'auth_error'
+             or last_sync_at is null
+             or last_sync_at < now() - ($1::bigint * interval '1 millisecond'))
       order by email`,
+    [BRIEF_STALE_SYNC_MS],
   );
   return rows.map((r) => ({
     email: r.email,
-    reason: r.last_error ?? "never synced",
+    reason:
+      r.last_error ??
+      (r.last_sync_at === null
+        ? "never synced"
+        : `no successful sync since ${r.last_sync_at.toISOString()}`),
   }));
 }
 

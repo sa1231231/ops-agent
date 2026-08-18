@@ -73,6 +73,12 @@ export async function listAccounts(): Promise<Account[]> {
   return rows;
 }
 
+/**
+ * Marks an account as needing a human: the grant is gone, reconnect it.
+ *
+ * Reserved for genuinely permanent failures. A red badge that sometimes means
+ * "wait an hour" is a badge nobody reads.
+ */
 export async function markAccountError(
   accountId: number,
   message: string,
@@ -81,6 +87,24 @@ export async function markAccountError(
     `update accounts
         set status = 'auth_error', last_error = $2, updated_at = now()
       where id = $1`,
+    [accountId, message.slice(0, 1000)],
+  );
+}
+
+/**
+ * Records a sync that failed for a reason that may well pass on its own.
+ *
+ * Status is deliberately untouched. The console already derives "stale" from
+ * last_sync_at falling behind, so an account that keeps failing surfaces by
+ * itself after ninety minutes, while a single bad cycle stays what it is: a
+ * message on the row explaining the gap, and nothing more.
+ */
+export async function markAccountSyncFailure(
+  accountId: number,
+  message: string,
+): Promise<void> {
+  await pool.query(
+    "update accounts set last_error = $2, updated_at = now() where id = $1",
     [accountId, message.slice(0, 1000)],
   );
 }

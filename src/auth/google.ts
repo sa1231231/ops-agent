@@ -49,24 +49,76 @@ interface GoogleTokenResponse {
   error_description?: string;
 }
 
+/**
+ * OAuth error codes that mean the grant itself is gone.
+ *
+ * This is the whole distinction that matters here. `invalid_grant` is Google
+ * saying "that refresh token is no longer valid" — revoked, password changed,
+ * consent withdrawn — and no amount of retrying fixes it. Everything else,
+ * including a 500 `internal_failure`, is Google saying "not right now", which is
+ * a completely different situation and must not be reported to a human as a
+ * dead account.
+ */
+const PERMANENT_TOKEN_ERRORS = new Set([
+  "invalid_grant",
+  "invalid_client",
+  "unauthorized_client",
+  "invalid_scope",
+]);
+
+export class GoogleTokenError extends Error {
+  constructor(
+    /** 0 when the request never got a response at all. */
+    readonly status: number,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "GoogleTokenError";
+  }
+
+  /** True when reconnecting is the only fix; false when waiting is. */
+  get isPermanent(): boolean {
+    return PERMANENT_TOKEN_ERRORS.has(this.code);
+  }
+}
+
 async function postToken(body: URLSearchParams): Promise<GoogleTokenResponse> {
-  const res = await fetch(TOKEN_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-  });
+  let res: Response;
+  try {
+    res = await fetch(TOKEN_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+    });
+  } catch (err) {
+    // DNS, TLS, connection reset. Never a statement about the token.
+    throw new GoogleTokenError(
+      0,
+      "network_error",
+      `Could not reach Google's token endpoint: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   const json = (await res.json().catch(() => ({}))) as GoogleTokenResponse;
 
   if (!res.ok || json.error) {
     // Google's error/description are safe to surface; the token fields are not.
-    throw new Error(
-      `Google token endpoint ${res.status}: ${json.error ?? "unknown"}` +
+    const code = json.error ?? (res.ok ? "unknown" : `http_${res.status}`);
+    throw new GoogleTokenError(
+      res.status,
+      code,
+      `Google token endpoint ${res.status}: ${code}` +
         (json.error_description ? `: ${json.error_description}` : ""),
     );
   }
   return json;
 }
+
+const REFRESH_ATTEMPTS = 3;
+const REFRESH_BACKOFF_MS = [400, 1600];
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function toTokenSet(json: GoogleTokenResponse): TokenSet {
   if (!json.access_token) {
@@ -105,19 +157,42 @@ export async function exchangeCode(code: string): Promise<TokenSet> {
   return tokens;
 }
 
+/**
+ * Exchanges a refresh token for an access token, retrying Google's bad seconds.
+ *
+ * Refresh happens roughly once an hour per account across fifteen accounts, so
+ * over a week this endpoint is called a couple of thousand times and it will
+ * return a 500 occasionally no matter what we do. Absorbing that here is the
+ * right layer: a blip that resolves in under two seconds should never become an
+ * account status a human has to interpret, let alone a line in the client's
+ * brief saying his mailbox was skipped.
+ *
+ * Permanent errors are not retried. Hammering the endpoint with a refresh token
+ * Google has already told us is dead earns nothing but rate limiting.
+ */
 export async function refreshAccessToken(
   refreshToken: string,
 ): Promise<TokenSet> {
-  return toTokenSet(
-    await postToken(
-      new URLSearchParams({
-        refresh_token: refreshToken,
-        client_id: requireEnv("GOOGLE_CLIENT_ID"),
-        client_secret: requireEnv("GOOGLE_CLIENT_SECRET"),
-        grant_type: "refresh_token",
-      }),
-    ),
-  );
+  const body = new URLSearchParams({
+    refresh_token: refreshToken,
+    client_id: requireEnv("GOOGLE_CLIENT_ID"),
+    client_secret: requireEnv("GOOGLE_CLIENT_SECRET"),
+    grant_type: "refresh_token",
+  });
+
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return toTokenSet(await postToken(body));
+    } catch (err) {
+      const retryable =
+        err instanceof GoogleTokenError && !err.isPermanent && attempt < REFRESH_ATTEMPTS;
+      if (!retryable) throw err;
+      console.warn(
+        `[auth] token refresh attempt ${attempt} failed (${(err as GoogleTokenError).code}), retrying`,
+      );
+      await sleep(REFRESH_BACKOFF_MS[attempt - 1] ?? 1600);
+    }
+  }
 }
 
 /** Identifies which mailbox a token belongs to, so the user picks the account. */
