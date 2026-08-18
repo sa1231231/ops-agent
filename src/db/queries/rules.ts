@@ -297,6 +297,30 @@ export async function listThreadRules(): Promise<ThreadRuleRow[]> {
  * own — a suggestion engine acting unsupervised is exactly the drift we are
  * trying to avoid.
  */
+/**
+ * How often each "Not right" reason has been given on a priority.
+ *
+ * Priorities carry no thread key, so they can never appear in weightSuggestions
+ * above, which joins verdicts to the scoring snapshot. That is why this feedback
+ * used to disappear: it was written to a table nothing queried. Counted here so
+ * the console can offer the standing instruction the complaint argues for.
+ */
+export interface PriorityComplaint {
+  choice: string;
+  votes: number;
+}
+
+export async function priorityComplaints(): Promise<PriorityComplaint[]> {
+  const { rows } = await pool.query<{ choice: string; votes: string }>(
+    `select choice, count(*) as votes
+       from feedback
+      where choice like 'priority-%' and choice <> 'priority-good'
+      group by choice
+      order by count(*) desc, choice`,
+  );
+  return rows.map((r) => ({ choice: r.choice, votes: Number(r.votes) }));
+}
+
 export interface WeightSuggestion {
   signal: string;
   downVotes: number;

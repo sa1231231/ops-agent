@@ -1,5 +1,6 @@
 import type {
   BriefRule,
+  PriorityComplaint,
   SenderRuleRow,
   ThreadRuleRow,
   WeightSuggestion,
@@ -7,6 +8,7 @@ import type {
 import { confidenceScale, effectivePoints } from "../signals/rules.js";
 import { formatLocalDateTime } from "../time.js";
 import { escapeHtml } from "./admin.js";
+import { priorityChoiceById } from "./feedback.js";
 import { SCORING_STYLE, weightsTable } from "./scoring.js";
 
 /**
@@ -200,12 +202,58 @@ function houseTable(rules: BriefRule[]): string {
     </form>`;
 }
 
+/**
+ * Turns priority complaints into an instruction he can adopt in one click.
+ *
+ * Posts to the same /rules/house endpoint the manual form uses, so adopting one
+ * is an ordinary standing instruction from the moment it lands: visible in
+ * section 3, editable, and removable. Anything already added is dropped from the
+ * list rather than offered twice.
+ */
+function priorityComplaintBlock(
+  complaints: PriorityComplaint[],
+  house: BriefRule[],
+): string {
+  const existing = new Set(house.map((h) => h.rule.trim()));
+
+  const rows = complaints
+    .map((c) => ({ complaint: c, choice: priorityChoiceById(c.choice) }))
+    .filter((r) => r.choice !== null);
+
+  if (rows.length === 0) {
+    return `<div class="empty">No verdicts on priorities yet. Use "Not right" under a priority on the briefs page.</div>`;
+  }
+
+  return rows
+    .map(({ complaint, choice }) => {
+      const times = `${complaint.votes} time${complaint.votes === 1 ? "" : "s"}`;
+      // A complaint that generalises to nothing is still worth showing: the
+      // count is the signal, even when there is no rule to offer.
+      if (choice!.proposes === null) {
+        return `<div class="sugg">${escapeHtml(choice!.label)}, ${times}. Nothing to add as a rule, this one is about a single morning.</div>`;
+      }
+      if (existing.has(choice!.proposes.trim())) {
+        return `<div class="sugg">${escapeHtml(choice!.label)}, ${times}. Already a standing instruction.</div>`;
+      }
+      return `<div class="sugg">
+        <div>${escapeHtml(choice!.label)}, ${times}.</div>
+        <div class="line" style="opacity:.75;margin:.35rem 0">${escapeHtml(choice!.proposes)}</div>
+        <form method="post" action="/rules/house">
+          <input type="hidden" name="rule" value="${escapeHtml(choice!.proposes)}">
+          <button type="submit">Add this instruction</button>
+        </form>
+      </div>`;
+    })
+    .join("");
+}
+
 export function renderRulesPage(
   senders: SenderRuleRow[],
   threads: ThreadRuleRow[],
   house: BriefRule[],
   suggestions: WeightSuggestion[],
   feedbackCount: number,
+  priorityComplaints: PriorityComplaint[] = [],
 ): string {
   return `<!doctype html>
 <html lang="en">
@@ -251,7 +299,16 @@ export function renderRulesPage(
     </div>
 
     <div class="block">
-      <h2>4. Suggestions</h2>
+      <h2>4. Priorities</h2>
+      <p class="section-sub">
+        What you have marked wrong under a priority, and the standing instruction
+        each one argues for. Nothing here is applied until you add it.
+      </p>
+      ${priorityComplaintBlock(priorityComplaints, house)}
+    </div>
+
+    <div class="block">
+      <h2>5. Suggestions</h2>
       <p class="section-sub">
         Patterns across the ${feedbackCount} verdict${feedbackCount === 1 ? "" : "s"} so far.
         These change nothing on their own; they are a prompt to look, and any weight

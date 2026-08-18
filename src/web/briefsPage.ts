@@ -340,6 +340,12 @@ function renderCard(brief: BriefSummaryWithRuns, verdicts: Map<string, string | 
       ? `<div class="line conflict">${escapeHtml(c.conflicts_line)}</div>`
       : "";
 
+  // Items a priority already stated are dropped, exactly as the message drops
+  // them. The page is a record of what he actually received, and listing an item
+  // here that the text showed once made the brief look like it repeated itself.
+  // The row still exists in `brief_items`, so carry-over is unaffected.
+  const attention = (c?.emails ?? []).filter((e) => !e.coveredByPriority);
+
   const body = c
     ? `
       ${schedule}
@@ -364,9 +370,9 @@ function renderCard(brief: BriefSummaryWithRuns, verdicts: Map<string, string | 
           : ""
       }
       ${
-        c.emails.length
-          ? `<div class="label">Needs attention (${c.emails.length})</div>
-             <ol>${c.emails
+        attention.length
+          ? `<div class="label">Needs attention (${attention.length})</div>
+             <ol>${attention
                .map((e) => {
                  const row = snapshot.get(e.thread_key);
                  // No `reason` here. It reads as commentary on a line that has

@@ -45,6 +45,7 @@ import {
   setThreadRule,
   upsertSenderRule,
   resetLearnedState,
+  priorityComplaints,
   weightSuggestions,
   type Verdict,
 } from "../db/queries/rules.js";
@@ -685,18 +686,20 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
   }
 
   if (path === "/rules") {
-    const [senders, threads, house, suggestions, counted] = await Promise.all([
+    const [senders, threads, house, suggestions, counted, complaints] = await Promise.all([
       listSenderRules(),
       listThreadRules(),
       activeBriefRules(),
       weightSuggestions(),
       pool.query<{ n: string }>("select count(*)::text as n from feedback"),
+      priorityComplaints(),
     ]);
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(
       renderRulesPage(
         senders, threads, house, suggestions,
         Number(counted.rows[0]?.n ?? 0),
+        complaints,
       ),
     );
     return;

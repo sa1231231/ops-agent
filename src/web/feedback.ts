@@ -85,36 +85,84 @@ export function choiceById(id: string): FeedbackChoice | null {
 }
 
 /**
- * Priorities are judged differently, because they are not scored objects.
+ * Why a priority was wrong.
  *
- * Everything in "needs attention" is a real thread with a score behind it, so a
- * verdict can become arithmetic. A priority is a sentence the model wrote — no
- * rule can demote it. These feed standing instructions and the suggestions
- * query, and nothing else. Saying so is better than implying a scoring effect
- * that cannot exist.
+ * These were four options that all declared the same effect, "Recorded against
+ * the priorities prompt", and all collapsed to the same stored verdict. Choosing
+ * between them changed nothing, which is exactly what made the menu feel vague
+ * next to the attention one, where every option routes somewhere different and
+ * says so.
+ *
+ * They now name the failures the briefs actually produced rather than abstract
+ * qualities, and each one that generalises carries the standing instruction it
+ * proposes. The console counts them and offers that instruction for adoption
+ * once there is a pattern. Nothing is written to the prompt automatically: a
+ * suggestion engine acting unsupervised is the drift this whole layer exists to
+ * avoid, so it proposes and he decides.
  */
-export const PRIORITY_CHOICES: readonly { id: string; label: string; effect: string }[] = [
-  {
-    id: "priority-not-mine",
-    label: "Not actually a priority for me today",
-    effect: "Recorded against the priorities prompt",
-  },
+export interface PriorityChoice {
+  id: string;
+  label: string;
+  effect: string;
+  /**
+   * The standing instruction this complaint argues for, or null when it is about
+   * this one priority and generalises to nothing.
+   */
+  proposes: string | null;
+}
+
+export const PRIORITY_CHOICES: readonly PriorityChoice[] = [
   {
     id: "priority-vague",
-    label: "Too vague to act on",
-    effect: "Recorded against the priorities prompt",
+    label: "Too general to act on",
+    effect: "Suggests a rule requiring a name or a deadline",
+    proposes:
+      "Every priority must name a specific person, thread, meeting, or deadline. " +
+      "Never write a general instruction like staying on top of something.",
   },
   {
-    id: "priority-obvious",
-    label: "Obvious, I did not need telling",
-    effect: "Recorded against the priorities prompt",
+    id: "priority-meeting-prep",
+    label: "Just says to prepare for a meeting",
+    effect: "Suggests a rule dropping meeting prep priorities",
+    proposes:
+      "Never write a priority whose only content is preparing for a meeting, " +
+      "writing an agenda for one, or setting an objective for a calendar block. " +
+      "He can see his own calendar.",
+  },
+  {
+    id: "priority-duplicate",
+    label: "Already said under Needs attention",
+    effect: "Suggests a rule against reporting the same thing twice",
+    proposes:
+      "When a priority is about a thread in the attention list, claim that " +
+      "thread in covers and write the priority so it carries the whole point. " +
+      "Never let the same item appear in both sections.",
+  },
+  {
+    id: "priority-invented",
+    label: "Says something that is not true",
+    effect: "Suggests a rule against inventing detail",
+    proposes:
+      "Never invent detail to sound concrete. If nothing in the input says he " +
+      "has a given number of asks, decisions, or blockers, do not write that he does.",
+  },
+  {
+    id: "priority-not-mine",
+    label: "Not mine to do today",
+    effect: "Recorded against this morning only",
+    proposes: null,
   },
   {
     id: "priority-missing",
-    label: "Something more important was left out",
-    effect: "Recorded against the priorities prompt",
+    label: "Something more important than this was left out",
+    effect: "Recorded as a gap, not as a badly written priority",
+    proposes: null,
   },
 ] as const;
+
+export function priorityChoiceById(id: string): PriorityChoice | null {
+  return PRIORITY_CHOICES.find((c) => c.id === id) ?? null;
+}
 
 export function isPriorityChoice(id: string): boolean {
   return id === "priority-good" || PRIORITY_CHOICES.some((c) => c.id === id);
