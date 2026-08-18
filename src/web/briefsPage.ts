@@ -245,7 +245,7 @@ function threadControls(
         <button type="submit" name="choice" value="good" class="yes">Good call</button>
       </form>
       <span class="dot">&middot;</span>
-      <details>
+      <details name="judge">
         <summary class="no">Not right</summary>
         <form method="post" action="/feedback">${hidden}
           <div class="menu">
@@ -284,7 +284,7 @@ function priorityControls(
         <button type="submit" name="choice" value="priority-good" class="yes">Good call</button>
       </form>
       <span class="dot">&middot;</span>
-      <details>
+      <details name="judge">
         <summary class="no">Not right</summary>
         <form method="post" action="/feedback">${hidden}
           <div class="menu">${PRIORITY_CHOICES.map(menuOption).join("")}</div>
@@ -472,6 +472,35 @@ function missedPanel(missed: MissedThread[]): string {
     </div>`;
 }
 
+/**
+ * Closes an open "Not right" menu when you click away from it or press Escape.
+ *
+ * `<details>` is a disclosure widget, not a dropdown: nothing in HTML closes one
+ * on an outside click, so an opened menu stayed open until you clicked its
+ * summary again. The grouping attribute above means opening a second menu closes
+ * the first, which handles most of it, but clicking anywhere else on the page
+ * still left one hanging.
+ *
+ * Eight lines of inline vanilla JS rather than the "no JS" the rest of this
+ * console holds to. The rule exists to keep out frameworks and build steps, and
+ * this is neither. Everything still works with scripting off, which is the part
+ * that actually matters: the menu opens, the options are real submit buttons,
+ * and the only thing lost is the convenience of dismissing it by clicking away.
+ */
+const DISMISS_SCRIPT = `
+  document.addEventListener('click', function (e) {
+    document.querySelectorAll('details[name="judge"][open]').forEach(function (d) {
+      if (!d.contains(e.target)) d.open = false;
+    });
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Escape') return;
+    document.querySelectorAll('details[name="judge"][open]').forEach(function (d) {
+      d.open = false;
+    });
+  });
+`;
+
 export function renderBriefsPage(
   briefs: BriefSummaryWithRuns[],
   requestedPage: number,
@@ -527,6 +556,7 @@ export function renderBriefsPage(
 
     ${missedPanel(missed)}
   </main>
+  <script>${DISMISS_SCRIPT}</script>
 </body>
 </html>`;
 }
