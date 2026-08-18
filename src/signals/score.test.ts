@@ -37,6 +37,7 @@ function candidate(overrides: Partial<ThreadCandidate> = {}): ThreadCandidate {
     ccEmails: [],
     isAutomated: false,
     hasListUnsubscribe: false,
+    isUnread: true,
     outboundCount: 3,
     lastOutboundToSenderAt: daysAgo(5),
     meetingSoonAt: null,
@@ -211,5 +212,78 @@ describe("platform notification relays are not email", () => {
     const demotions = scored.signals.filter((s) => s.points <= W.AUTOMATED);
     assert.equal(demotions.length, 1, "exactly one large demotion");
     assert.equal(demotions[0]?.name, "notification-relay");
+  });
+});
+
+/**
+ * Read is not handled.
+ *
+ * The premise of the brief is that a six day old unanswered email outranks this
+ * morning's noise, and a six day old email is one he has certainly opened. So
+ * "he read it" can only demote when nothing was asked of him. These tests exist
+ * to stop a future tightening of the read penalty from quietly deleting the
+ * thing the system was built to surface.
+ */
+describe("already-read", () => {
+  const shared = {
+    subject: "Good article for singers",
+    snippet: "Thought you would enjoy this one, sharing it along.",
+    lastInboundAt: daysAgo(8),
+    awaitingReply: true,
+  };
+  const asked = {
+    subject: "Contract redline",
+    snippet: "Can you review the redline and confirm before Friday?",
+    lastInboundAt: daysAgo(8),
+    awaitingReply: true,
+  };
+
+  it("demotes a read share far below the same share unread", () => {
+    const unread = scoreThread(candidate({ ...shared, isUnread: true }), NOW);
+    const read = scoreThread(candidate({ ...shared, isUnread: false }), NOW);
+    assert.ok(
+      read.score < unread.score - 40,
+      `read ${read.score} vs unread ${unread.score}`,
+    );
+  });
+
+  it("stops age accruing once he has read it and nothing was asked", () => {
+    const read = scoreThread(candidate({ ...shared, isUnread: false }), NOW);
+    assert.equal(
+      read.signals.filter((s) => s.name === "aging").length,
+      0,
+      "days since are not evidence of neglect on something he read and dismissed",
+    );
+  });
+
+  it("keeps a read question waiting, and keeps its age", () => {
+    const read = scoreThread(candidate({ ...asked, isUnread: false }), NOW);
+    assert.ok(
+      read.signals.some((s) => s.name === "aging"),
+      "reading a question does not answer it, so it still ages",
+    );
+    assert.ok(read.score >= W.MIN_SCORE_FOR_BRIEF, `scored ${read.score}`);
+  });
+
+  it("still ranks a read week-old question above an unread share from today", () => {
+    // The constraint this whole file exists to protect, restated with read
+    // state in play: recency is not importance.
+    const oldQuestion = scoreThread(candidate({ ...asked, isUnread: false }), NOW);
+    const freshShare = scoreThread(
+      candidate({ ...shared, isUnread: true, lastInboundAt: daysAgo(0) }),
+      NOW,
+    );
+    assert.ok(
+      oldQuestion.score > freshShare.score,
+      `question ${oldQuestion.score} vs share ${freshShare.score}`,
+    );
+  });
+
+  it("says nothing about read state on a thread that is not waiting", () => {
+    const replied = scoreThread(
+      candidate({ ...shared, awaitingReply: false, isUnread: false }),
+      NOW,
+    );
+    assert.equal(replied.signals.filter((s) => s.name === "already-read").length, 0);
   });
 });

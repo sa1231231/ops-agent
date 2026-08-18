@@ -131,6 +131,30 @@ export const ASK_PATTERNS: ReadonlyArray<{ name: string; re: RegExp }> = [
  * thread. Build failures and receipts are technically "awaiting reply" forever,
  * and without this the brief becomes a list of them.
  */
+/**
+ * He has already opened it.
+ *
+ * Read is not the same as handled, and this deliberately does not filter. The
+ * whole premise of the brief is that a six day old unanswered email outranks
+ * this morning's noise, and a six day old email is one he has certainly read.
+ * Treating "read" as "done" would delete exactly what this was built to surface.
+ *
+ * What read actually tells us is that the brief is not breaking news to him. So
+ * it matters enormously in one case and barely at all in the other:
+ *
+ * READ_NO_ASK is large enough to cancel AWAITING_REPLY outright. He opened it,
+ * nobody asked him anything, and he moved on. That is a decision, not an
+ * oversight, and reporting it back to him every morning is the system arguing
+ * with him. This is the case of someone who shares links.
+ *
+ * READ_WITH_ASK is deliberately small. He read a question and has not answered
+ * it. Seeing it and owing it are not in tension; if anything that is the more
+ * pointed omission, so the demotion here is little more than an acknowledgement
+ * that he is aware of it.
+ */
+export const READ_NO_ASK = -34;
+export const READ_WITH_ASK = -6;
+
 export const AUTOMATED = -40;
 
 /** Bulk mail on top of automated — a mailing list, not a notification. */

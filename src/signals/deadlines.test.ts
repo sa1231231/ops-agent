@@ -125,7 +125,7 @@ describe("machines do not get deadlines", () => {
       fromName: null, toEmails: ["sam@servicecallsaver.com"], ccEmails: [],
       isAutomated: false, hasListUnsubscribe: false,
       outboundCount: 0, lastOutboundToSenderAt: null,
-      meetingSoonAt: null, metRecentlyAt: null,
+      meetingSoonAt: null, metRecentlyAt: null, isUnread: true,
       deadline: deadlineFor("offer ends today", FRIDAY, FRIDAY, TZ),
     };
     assert.ok(base.deadline, "fixture precondition: the words do parse");

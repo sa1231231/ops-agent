@@ -30,6 +30,8 @@ export interface ThreadCandidate {
   ccEmails: string[];
   isAutomated: boolean;
   hasListUnsubscribe: boolean;
+  /** Gmail still marks the newest inbound message unread. */
+  isUnread: boolean;
 
   /** From the correspondent graph, for this sender on this account. */
   outboundCount: number;
@@ -132,12 +134,42 @@ export function scoreThread(
     ? daysBetween(candidate.lastInboundAt, now)
     : 0;
 
+  // Computed before the awaiting-reply block because the read penalty depends on
+  // it: "he opened it and nobody asked him anything" is a very different claim
+  // from "he opened a direct question and has not answered".
+  const ask = detectAsk(candidate);
+
   // Awaiting a reply is the question the brief answers. Everything else only
   // adjusts the ordering among threads that are already waiting.
   if (candidate.awaitingReply) {
     signals.push({ name: "awaiting-reply", points: W.AWAITING_REPLY });
 
-    const aging = W.agingScore(daysWaiting);
+    // He has already seen it. Only meaningful while the thread is otherwise
+    // waiting: an unread message he never opened is the ordinary case and earns
+    // nothing here either way.
+    const seenAndUnasked = !candidate.isUnread && ask === null;
+    if (!candidate.isUnread) {
+      signals.push(
+        ask
+          ? {
+              name: "already-read",
+              points: W.READ_WITH_ASK,
+              detail: "you have read it, but it does ask something",
+            }
+          : {
+              name: "already-read",
+              points: W.READ_NO_ASK,
+              detail: "you have read it and nothing was asked",
+            },
+      );
+    }
+
+    // Age is pressure only while something is actually waiting. He opened it,
+    // nobody asked him anything, and he moved on: the days since are not
+    // evidence of neglect, they are just days. Letting the curve run anyway was
+    // what kept a shared article climbing for eight days after he had read it,
+    // and no flat penalty fixes that because the curve outgrows any constant.
+    const aging = seenAndUnasked ? 0 : W.agingScore(daysWaiting);
     if (aging > 0) {
       signals.push({
         name: "aging",
@@ -234,7 +266,7 @@ export function scoreThread(
     }
   }
 
-  const ask = detectAsk(candidate);
+  // Detected once, above, because the read penalty branches on it.
   if (ask) signals.push(ask);
 
   if (candidate.messageCount >= W.CONVERSATION_MIN_MESSAGES) {

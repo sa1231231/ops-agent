@@ -324,6 +324,7 @@ interface HistoryResponse {
   history?: Array<{
     messagesAdded?: Array<{ message: { id: string } }>;
     labelsAdded?: Array<{ message: { id: string }; labelIds?: string[] }>;
+    labelsRemoved?: Array<{ message: { id: string }; labelIds?: string[] }>;
   }>;
   nextPageToken?: string;
   historyId?: string;
@@ -356,6 +357,20 @@ const RECONSIDER_ON_LABEL = new Set([
   "SPAM",
   "TRASH",
 ]);
+
+/**
+ * Labels whose *removal* means the stored copy is now wrong.
+ *
+ * UNREAD is the one that matters. Reading a message emits labelRemoved, never
+ * labelAdded, so without watching for it a message stays UNREAD in Postgres
+ * forever no matter how many times he opens it. Ranking then cannot tell an
+ * email he read and dismissed from one he never opened, which is the whole
+ * distinction behind the already-read signal.
+ *
+ * Narrow for the same reason the added set is: unstarring and removing user
+ * labels are not worth an API call.
+ */
+const RECONSIDER_ON_LABEL_REMOVED = new Set(["UNREAD"]);
 
 export interface IncrementalResult {
   messages: NormalizedMessage[];
@@ -391,6 +406,7 @@ export async function fetchIncremental(
       // parameter and silently ignores a comma-separated string.
       params.append("historyTypes", "messageAdded");
       params.append("historyTypes", "labelAdded");
+      params.append("historyTypes", "labelRemoved");
       if (pageToken) params.set("pageToken", pageToken);
 
       const page = await googleFetch<HistoryResponse>(
@@ -406,6 +422,13 @@ export async function fetchIncremental(
         // is dropped again — this only reopens the ones he reclassified.
         for (const labelled of entry.labelsAdded ?? []) {
           if ((labelled.labelIds ?? []).some((id) => RECONSIDER_ON_LABEL.has(id))) {
+            ids.add(labelled.message.id);
+          }
+        }
+
+        // He opened it. Refetch so the stored labels match the mailbox.
+        for (const labelled of entry.labelsRemoved ?? []) {
+          if ((labelled.labelIds ?? []).some((id) => RECONSIDER_ON_LABEL_REMOVED.has(id))) {
             ids.add(labelled.message.id);
           }
         }

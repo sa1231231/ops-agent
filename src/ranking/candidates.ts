@@ -34,6 +34,7 @@ interface CandidateRow {
   cc_emails: string[];
   is_automated: boolean;
   has_list_unsubscribe: boolean;
+  is_unread: boolean;
   outbound_count: number;
   last_outbound_to_sender_at: Date | null;
   meeting_soon_at: Date | null;
@@ -46,7 +47,10 @@ with latest_inbound as (
   -- they said, and whether he was addressed directly.
   select distinct on (m.account_id, m.gmail_thread_id)
          m.account_id, m.gmail_thread_id, m.from_email, m.from_name, m.snippet,
-         m.to_emails, m.cc_emails, m.is_automated, m.has_list_unsubscribe
+         m.to_emails, m.cc_emails, m.is_automated, m.has_list_unsubscribe,
+         -- Gmail's own read state for the newest inbound message. Absent means
+         -- he has opened it.
+         ('UNREAD' = any(m.labels)) as is_unread
     from messages m
    where m.direction = 'inbound'
    order by m.account_id, m.gmail_thread_id, m.sent_at desc nulls last
@@ -67,6 +71,7 @@ select
   li.cc_emails,
   li.is_automated,
   li.has_list_unsubscribe,
+  li.is_unread,
   coalesce(c.outbound_count, 0) as outbound_count,
   c.last_outbound_at as last_outbound_to_sender_at,
 
@@ -122,6 +127,7 @@ function toCandidate(row: CandidateRow, now: Date): ThreadCandidate {
     ccEmails: row.cc_emails ?? [],
     isAutomated: row.is_automated,
     hasListUnsubscribe: row.has_list_unsubscribe,
+    isUnread: row.is_unread,
     outboundCount: row.outbound_count,
     lastOutboundToSenderAt: row.last_outbound_to_sender_at,
     meetingSoonAt: row.meeting_soon_at,

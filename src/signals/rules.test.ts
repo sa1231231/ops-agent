@@ -38,6 +38,7 @@ function candidate(over: Partial<ThreadCandidate> = {}): ThreadCandidate {
     ccEmails: [],
     isAutomated: false,
     hasListUnsubscribe: false,
+    isUnread: true,
     outboundCount: 5,
     lastOutboundToSenderAt: daysAgo(2),
     meetingSoonAt: null,
