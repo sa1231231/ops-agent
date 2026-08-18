@@ -41,6 +41,7 @@ function candidate(overrides: Partial<ThreadCandidate> = {}): ThreadCandidate {
     isArchived: false,
     isImportant: true,
     reportedMornings: 0,
+    senderMessagesRecent: 0,
     outboundCount: 3,
     lastOutboundToSenderAt: daysAgo(5),
     meetingSoonAt: null,
@@ -394,6 +395,60 @@ describe("gmail importance", () => {
     assert.ok(
       marked.score - not.score < W.AWAITING_REPLY,
       "must never outweigh the thread actually waiting",
+    );
+  });
+});
+
+describe("machine repeat", () => {
+  const notice = {
+    subject: "[ops-agent] Worker run failed",
+    snippet: "The scheduled run did not complete.",
+    fromEmail: "notifications@example.com",
+    lastInboundAt: daysAgo(2),
+    awaitingReply: true,
+  };
+
+  it("demotes a machine that keeps sending", () => {
+    const once = scoreThread(candidate({ ...notice, senderMessagesRecent: 1 }), NOW);
+    const often = scoreThread(candidate({ ...notice, senderMessagesRecent: 18 }), NOW);
+    assert.ok(often.score < once.score);
+    assert.ok(often.signals.some((s) => s.name === "machine-repeat"));
+    assert.ok(!once.signals.some((s) => s.name === "machine-repeat"));
+  });
+
+  it("never penalises a person for emailing a lot", () => {
+    // Volume from a human is what the correspondent graph is meant to reward.
+    const human = scoreThread(
+      candidate({
+        ...notice,
+        subject: "Re: contract",
+        snippet: "Following up on this.",
+        fromEmail: "eric@kalman.com",
+        senderMessagesRecent: 18,
+      }),
+      NOW,
+    );
+    assert.ok(!human.signals.some((s) => s.name === "machine-repeat"));
+  });
+
+  it("stays capped so a live deadline still carries the thread", () => {
+    const due = scoreThread(
+      candidate({
+        ...notice,
+        // Hetzner is a machine by its headers, not by its address: the local
+        // part and domain look human, and List-Unsubscribe is what gives it away.
+        fromEmail: "abuse-network@hetzner.com",
+        isAutomated: true,
+        senderMessagesRecent: 40,
+        deadline: { state: "today", phrase: "by the 14th", date: "2026-08-13" },
+      }),
+      NOW,
+    );
+    const repeat = due.signals.find((s) => s.name === "machine-repeat");
+    assert.ok(repeat && repeat.points >= W.MACHINE_REPEAT_MAX);
+    assert.ok(
+      Math.abs(W.MACHINE_REPEAT_MAX) < W.SENDER_RULE_MAX,
+      "a verdict from him must always be able to overrule the arithmetic",
     );
   });
 });

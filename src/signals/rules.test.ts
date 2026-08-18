@@ -42,6 +42,7 @@ function candidate(over: Partial<ThreadCandidate> = {}): ThreadCandidate {
     isArchived: false,
     isImportant: true,
     reportedMornings: 0,
+    senderMessagesRecent: 0,
     outboundCount: 5,
     lastOutboundToSenderAt: daysAgo(2),
     meetingSoonAt: null,

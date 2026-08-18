@@ -41,6 +41,8 @@ export interface ThreadCandidate {
    * Resets on a new inbound message and on a "Good call" verdict.
    */
   reportedMornings: number;
+  /** Inbound messages from this sender across all accounts, recent window. */
+  senderMessagesRecent: number;
 
   /** From the correspondent graph, for this sender on this account. */
   outboundCount: number;
@@ -288,6 +290,18 @@ export function scoreThread(
 
   // Detected once, above, because the read penalty branches on it.
   if (ask) signals.push(ask);
+
+  // A machine that keeps sending. Only applied to senders already identified as
+  // machines: somebody who emails a lot is somebody he corresponds with, and the
+  // correspondent graph exists to reward that.
+  if (machine && candidate.senderMessagesRecent >= W.MACHINE_REPEAT_AFTER) {
+    const over = candidate.senderMessagesRecent - W.MACHINE_REPEAT_AFTER + 1;
+    signals.push({
+      name: "machine-repeat",
+      points: Math.max(over * W.MACHINE_REPEAT_PER_MESSAGE, W.MACHINE_REPEAT_MAX),
+      detail: `${candidate.senderMessagesRecent} messages from this sender lately`,
+    });
+  }
 
   if (!candidate.isImportant) {
     signals.push({

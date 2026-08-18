@@ -258,6 +258,29 @@ export const AUTOMATED_LOCALPARTS: readonly RegExp[] = [
  * relay carrying every remaining positive signal must still land below the
  * floor, or a single detected question would surface it.
  */
+/**
+ * The same machine, over and over.
+ *
+ * Five "worker run failed" emails are not five times as important as one, and
+ * they are usually less: a run of them means something is being worked on, which
+ * he already knows. On Aug 14 the brief carried two separate Hetzner items about
+ * the same abuse ticket, one saying a statement was needed and one saying the
+ * statement had been received. That is the shape this catches.
+ *
+ * Volume only counts against senders already identified as machines. A person
+ * who emails a lot is a person he corresponds with, and the correspondent graph
+ * is supposed to reward exactly that.
+ *
+ * Capped well below what a live deadline is worth, so the Hetzner case still
+ * clears the bar, and well below SENDER_RULE_MAX so a verdict from him saying
+ * this sender does matter can always overrule the arithmetic. He is the
+ * authority on this, not the weights.
+ */
+export const MACHINE_REPEAT_AFTER = 4;
+export const MACHINE_REPEAT_PER_MESSAGE = -6;
+export const MACHINE_REPEAT_MAX = -30;
+export const MACHINE_REPEAT_WINDOW_DAYS = 14;
+
 export const NOTIFICATION_RELAY = -60;
 
 export const NOTIFICATION_RELAY_DOMAINS: readonly RegExp[] = [

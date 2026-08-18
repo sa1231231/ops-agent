@@ -1,3 +1,4 @@
+import { AUTOMATED_DOMAINS, AUTOMATED_LOCALPARTS } from "../signals/weights.js";
 import {
   COLD_START_DAYS,
   MAX_INBOX_MESSAGES_PER_ACCOUNT,
@@ -132,8 +133,26 @@ function emailsFrom(header: string | undefined): string[] {
   return [...seen];
 }
 
-const AUTOMATED_LOCALPART =
-  /^(no[-_.]?reply|do[-_.]?not[-_.]?reply|notifications?|mailer[-_.]?daemon|postmaster|bounces?|auto[-_.]?reply|support@|alerts?)/i;
+/**
+ * Whether a sender is a machine, using the scorer's own patterns.
+ *
+ * This file used to carry a second, narrower regex of its own, and the two
+ * quietly disagreed. "hello@notify.railway.app" sent 18 messages in a fortnight
+ * and was stored as a human, because the local part was not "noreply" and this
+ * copy never looked at the domain at all; the scorer caught it through
+ * AUTOMATED_DOMAINS and demoted it anyway, so nothing was visibly broken while
+ * the stored flag was simply wrong.
+ *
+ * One definition now. The import points from sources into signals, which is the
+ * wrong direction for anything with behaviour in it, but these are regex
+ * constants and one shared list beats two lists that silently diverge.
+ */
+function looksAutomated(localPart: string, domain: string): boolean {
+  return (
+    AUTOMATED_LOCALPARTS.some((re) => re.test(localPart)) ||
+    AUTOMATED_DOMAINS.some((re) => re.test(domain))
+  );
+}
 
 export function normalizeMessage(raw: RawMessage): NormalizedMessage {
   const headers = headerMap(raw);
@@ -149,7 +168,7 @@ export function normalizeMessage(raw: RawMessage): NormalizedMessage {
     hasListUnsubscribe ||
     /^(bulk|list|junk)$/.test(precedence) ||
     (autoSubmitted !== "" && autoSubmitted !== "no") ||
-    AUTOMATED_LOCALPART.test(localPart) ||
+    looksAutomated(localPart, from.email?.split("@")[1] ?? "") ||
     labels.includes("CATEGORY_PROMOTIONS") ||
     labels.includes("CATEGORY_SOCIAL");
 

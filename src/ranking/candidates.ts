@@ -38,6 +38,7 @@ interface CandidateRow {
   is_archived: boolean;
   is_important: boolean;
   reported_mornings: number;
+  sender_messages_recent: number;
   outbound_count: number;
   last_outbound_to_sender_at: Date | null;
   meeting_soon_at: Date | null;
@@ -98,6 +99,16 @@ select
             '-infinity'::date)
       and b.local_date >= coalesce(t.last_inbound_at::date, '-infinity'::date)
   )::int as reported_mornings,
+
+  -- How much this sender has sent lately, across every account. Deliberately not
+  -- per account: one notifier hitting three of his mailboxes is the same noise
+  -- three times over, and counting it per mailbox would hide that.
+  (select count(*)
+     from messages m2
+    where m2.direction = 'inbound'
+      and m2.from_email = li.from_email
+      and m2.sent_at > now() - ($5 || ' days')::interval
+  )::int as sender_messages_recent,
   coalesce(c.outbound_count, 0) as outbound_count,
   c.last_outbound_at as last_outbound_to_sender_at,
 
@@ -157,6 +168,7 @@ function toCandidate(row: CandidateRow, now: Date): ThreadCandidate {
     isArchived: row.is_archived,
     isImportant: row.is_important,
     reportedMornings: row.reported_mornings,
+    senderMessagesRecent: row.sender_messages_recent,
     outboundCount: row.outbound_count,
     lastOutboundToSenderAt: row.last_outbound_to_sender_at,
     meetingSoonAt: row.meeting_soon_at,
@@ -182,6 +194,7 @@ export async function scoreAllCandidates(now = new Date()): Promise<ScoredThread
       String(W.MEETING_SOON_HOURS),
       String(W.MET_RECENTLY_DAYS),
       String(W.CANDIDATE_MAX_AGE_DAYS),
+      String(W.MACHINE_REPEAT_WINDOW_DAYS),
     ]),
     loadRuleSet(),
   ]);
